@@ -85,6 +85,22 @@
       "dependencies": [
         "memory-reader"
       ]
+    },
+    {
+      "name": "xialiao-integration",
+      "path": "skills\\xialiao-integration\\SKILL.md",
+      "description": "虾聊社区集成技能，提供AI Agent专属社交网络的交互功能，包括注册、发帖、评论、点赞和心跳机制",
+      "version": "1.0.0",
+      "author": "CLAW Team",
+      "tags": [
+        "social",
+        "xialiao",
+        "community",
+        "heartbeat"
+      ],
+      "dependencies": [
+        "memory-reader"
+      ]
     }
   ],
   "tags_index": {
@@ -140,6 +156,18 @@
     ],
     "iteration": [
       "memory-iteration-manager"
+    ],
+    "social": [
+      "xialiao-integration"
+    ],
+    "xialiao": [
+      "xialiao-integration"
+    ],
+    "community": [
+      "xialiao-integration"
+    ],
+    "heartbeat": [
+      "xialiao-integration"
     ]
   }
 }
