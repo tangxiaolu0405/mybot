@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "generated_at": "2026-02-26T00:46:55.670271",
+  "generated_at": "2026-02-26T01:00:00.000000",
   "skills": [
     {
       "name": "skill-list-reader",
@@ -40,6 +40,51 @@
         "specification"
       ],
       "dependencies": []
+    },
+    {
+      "name": "memory-reader",
+      "path": "skills\\memory-reader\\SKILL.md",
+      "description": "读取和管理CLAW项目的记忆系统，包括长期记忆、短期记忆和工作记忆。支持按关键词检索、按类型过滤、获取摘要等功能。",
+      "version": "1.0.0",
+      "author": "CLAW Team",
+      "tags": [
+        "memory",
+        "retrieval",
+        "knowledge-management"
+      ],
+      "dependencies": []
+    },
+    {
+      "name": "task-evolution-executor",
+      "path": "skills\\task-evolution-executor\\SKILL.md",
+      "description": "在单次任务执行过程中集成任务处理、记忆迭代和自主进化。负责协调任务执行的完整生命周期，包括准备、执行、记忆迭代和进化评估四个阶段。",
+      "version": "1.0.0",
+      "author": "CLAW Team",
+      "tags": [
+        "evolution",
+        "task-execution",
+        "memory-iteration",
+        "self-improvement"
+      ],
+      "dependencies": [
+        "memory-reader"
+      ]
+    },
+    {
+      "name": "memory-iteration-manager",
+      "path": "skills\\memory-iteration-manager\\SKILL.md",
+      "description": "管理CLAW项目的记忆迭代过程，包括信息提炼、记忆更新、流转规则执行和关联建立。负责在任务完成后自动执行记忆系统的迭代优化。",
+      "version": "1.0.0",
+      "author": "CLAW Team",
+      "tags": [
+        "memory",
+        "iteration",
+        "knowledge-management",
+        "self-improvement"
+      ],
+      "dependencies": [
+        "memory-reader"
+      ]
     }
   ],
   "tags_index": {
@@ -67,6 +112,34 @@
     ],
     "specification": [
       "skills-creator"
+    ],
+    "memory": [
+      "memory-reader",
+      "memory-iteration-manager"
+    ],
+    "retrieval": [
+      "memory-reader"
+    ],
+    "knowledge-management": [
+      "memory-reader",
+      "memory-iteration-manager"
+    ],
+    "evolution": [
+      "task-evolution-executor"
+    ],
+    "task-execution": [
+      "task-evolution-executor"
+    ],
+    "memory-iteration": [
+      "task-evolution-executor",
+      "memory-iteration-manager"
+    ],
+    "self-improvement": [
+      "task-evolution-executor",
+      "memory-iteration-manager"
+    ],
+    "iteration": [
+      "memory-iteration-manager"
     ]
   }
 }
