@@ -1,0 +1,72 @@
+{
+  "version": "1.0.0",
+  "generated_at": "2026-02-26T00:46:55.670271",
+  "skills": [
+    {
+      "name": "skill-list-reader",
+      "path": "skills\\skill-list-reader\\SKILL.md",
+      "description": "Reads and lists all available skills from the skills directory. Invoke when user asks for available skills, needs to find a specific skill, or AI needs to know what skills exist.",
+      "version": "1.0.0",
+      "author": "CLAW Team",
+      "tags": [
+        "skill-management",
+        "discovery",
+        "listing"
+      ],
+      "dependencies": []
+    },
+    {
+      "name": "skill-validator",
+      "path": "skills\\skill-validator\\SKILL.md",
+      "description": "验证和规范化技能文件的格式、结构和内容。发现问题时需用户确认后再修复。",
+      "version": "1.0.0",
+      "author": "CLAW Team",
+      "tags": [
+        "validation",
+        "skill-management",
+        "compliance"
+      ],
+      "dependencies": []
+    },
+    {
+      "name": "skills-creator",
+      "path": "skills\\skills-creator\\SKILL.md",
+      "description": "定义CLAW项目自定义技能的标准格式和规范。AI agent在创建技能时必须遵循此规范。",
+      "version": "1.0.0",
+      "author": "CLAW Team",
+      "tags": [
+        "agent",
+        "skill-creation",
+        "specification"
+      ],
+      "dependencies": []
+    }
+  ],
+  "tags_index": {
+    "skill-management": [
+      "skill-list-reader",
+      "skill-validator"
+    ],
+    "discovery": [
+      "skill-list-reader"
+    ],
+    "listing": [
+      "skill-list-reader"
+    ],
+    "validation": [
+      "skill-validator"
+    ],
+    "compliance": [
+      "skill-validator"
+    ],
+    "agent": [
+      "skills-creator"
+    ],
+    "skill-creation": [
+      "skills-creator"
+    ],
+    "specification": [
+      "skills-creator"
+    ]
+  }
+}
