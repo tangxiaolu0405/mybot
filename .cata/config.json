@@ -1,0 +1,24 @@
+{
+  "brain": {
+    "dir": "/Users/test/work/myproject/mybot/brain",
+    "base_dir": "/Users/test/work/myproject/mybot"
+  },
+  "llm": {
+    "provider": "qwen",
+    "api_key": "sk-84615d9baaea4f25bf1d2f69df5a7e18",
+    "api_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "model": "qwen-turbo",
+    "max_tokens": 2000,
+    "timeout": 60,
+    "enabled": true
+  },
+  "server": {
+    "socket_path": ".cata/cata.sock",
+    "log_level": "info"
+  },
+  "evolution": {
+    "enabled": true,
+    "cycle_interval": 3600,
+    "task_queue_interval": 30
+  }
+}
