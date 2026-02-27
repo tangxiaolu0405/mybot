@@ -1,24 +1,29 @@
 ---
 name: skills-creator
-description: 定义CLAW项目自定义技能的标准格式和规范。AI agent在创建技能时必须遵循此规范。
+description: 定义并创建本项目技能的标准格式与流程。当 skills-index 无匹配技能、需新增重复任务或标准化流程或封装专业知识时使用；创建后须经 skill-validator 校验并写入 skills-index。
 version: 1.0.0
 author: CLAW Team
 tags: [agent, skill-creation, specification]
 dependencies: []
 ---
 
-# Skills Creator
+# skills-creator
 
-**重要说明**: 本技能用于指导AI agent创建和管理CLAW项目中的自定义技能。所有技能描述应保持简洁，避免冗长的示例、模板和详细说明，以减少context消耗。
+## 触发
 
-## 技能格式规范
+- 需新增技能（重复任务、标准化流程、封装专业知识、跨会话复用）
+- 读 `skills/skills-index.json` 后无匹配项
 
-### YAML Frontmatter（必需）
+## 规范
+
+### Frontmatter（必需）
+
+与 skill-validator 一致，新建技能须包含：
 
 ```yaml
 ---
 name: skill-name
-description: 技能的详细描述
+description: 简要描述与调用时机
 version: 1.0.0
 author: CLAW Team
 tags: [tag1, tag2]
@@ -26,113 +31,46 @@ dependencies: []
 ---
 ```
 
-**必需字段**：
-- `name`: 技能唯一标识符，小写，连字符分隔
-- `description`: 技能的详细描述
-- `version`: 版本号（语义化版本）
-- `author`: 作者名称
-- `tags`: 技能标签列表
-- `dependencies`: 依赖的其他技能名称列表
+| 字段 | 要求 |
+|------|------|
+| `name` | 小写、连字符、≤64 字符，与目录名一致 |
+| `description` | 非空，建议 ≤200 字；含「做什么」与「何时用」 |
+| `dependencies` | 仅直接依赖技能名，禁止循环 |
 
-### Markdown 内容结构
+### 路径与目录
 
-必须包含以下部分：
+| 类型 | 路径 |
+|------|------|
+| 技能根目录 | `skills/` |
+| 单技能 | `skills/<name>/SKILL.md` |
+| 可选 | `skills/<name>/resources/` |
 
-```markdown
-# 技能名称
+### SKILL.md 正文结构
 
-## 功能描述
-[描述技能的功能、解决的问题、主要特性和适用范围]
+- **触发条件**：何时调用本技能
+- **执行步骤**：按序、可校验
+- **输入/输出或约定**：明确接口
+- **可选**：最佳实践、注意事项（简短）
 
-## 使用场景
-- 场景1: 描述
-- 场景2: 描述
+命名：仅小写与连字符，如 `code-generator`、`document-parser`。
 
-## 指令说明
-### 基础指令
-- 指令1: 说明
-- 指令2: 说明
+### 版本
 
-### 高级指令
-- 指令3: 说明
+语义化版本 MAJOR.MINOR.PATCH：不兼容改 MAJOR，兼容新增 MINOR，兼容修正 PATCH。
 
-## 最佳实践
-- 实践1
-- 实践2
+## 创建流程
 
-## 注意事项
-- 注意1
-- 注意2
-```
-
-## 命名约定
-
-- 技能名称：小写字母，连字符分隔，描述性强且简洁
-- 正确示例：`code-generator`, `document-parser`, `data-analyzer`
-- 错误示例：`CodeGenerator`, `code_generator`, `code generator`
-
-## 目录结构
+按序执行并勾选：
 
 ```
-skill-name/
-├── SKILL.md              # 技能主文件（必需）
-└── resources/            # 资源文件（可选）
-    ├── config.json
-    ├── templates/
-    └── data/
+- [ ] 1. 定 name、description、tags、dependencies
+- [ ] 2. 建目录 skills/<name>/，写 SKILL.md（frontmatter + 上述正文结构）
+- [ ] 3. 调用 skill-validator 校验；若有问题先报告、获确认后修复并复验
+- [ ] 4. 将新技能加入 skills/skills-index.json：skills 数组 + tags_index 中各 tag 对应 name
 ```
 
-## 技能调用约定
+**步骤 4 约定**：在 `skills` 中追加一项（含 name、path、description、version、author、tags、dependencies）；在 `tags_index` 中为每个 tag 在对应数组中追加本技能 `name`（若 key 不存在则新建数组）。
 
-### 调用触发条件
-1. 用户明确请求技能功能
-2. 用户需求与某个技能的功能匹配
-3. 当前技能依赖于其他技能
+## 收尾
 
-### 调用流程
-```
-用户请求 → 分析请求 → 识别技能 → 检查依赖 → 执行调用 → 返回结果
-```
-
-### 调用约定
-1. 加载技能的 SKILL.md 文件
-2. 解析 YAML frontmatter
-3. 检查依赖关系
-4. 根据用户请求匹配指令
-5. 按照指令说明执行操作
-6. 返回结果
-
-## 依赖管理
-
-在 YAML frontmatter 中声明依赖：
-
-```yaml
-dependencies:
-  - skill-a
-  - skill-b
-```
-
-依赖规则：
-- 只声明必需的依赖
-- 避免循环依赖
-- 明确依赖版本
-
-## 版本控制
-
-遵循语义化版本：`MAJOR.MINOR.PATCH`
-- `MAJOR`: 不兼容的 API 修改
-- `MINOR`: 向下兼容的功能性新增
-- `PATCH`: 向下兼容的问题修正
-
-## 质量标准
-
-### 格式检查清单
-- YAML frontmatter 完整
-- 必需字段齐全
-- Markdown 格式正确
-- 无语法错误
-
-### 内容检查清单
-- 描述清晰准确
-- 指令明确
-- 文档完整
+- 创建完成后，若为本次任务的一部分，按 brain/core.md 执行**任务后记忆迭代**。

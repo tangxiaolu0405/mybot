@@ -4,8 +4,8 @@
   "skills": [
     {
       "name": "skill-list-reader",
-      "path": "skills\\skill-list-reader\\SKILL.md",
-      "description": "Reads and lists all available skills from the skills directory. Invoke when user asks for available skills, needs to find a specific skill, or AI needs to know what skills exist.",
+      "path": "skills/skill-list-reader/SKILL.md",
+      "description": "从 skills 目录读取并列出所有可用技能。当需列举技能、按名称/标签查找或确认可调用技能时使用。",
       "version": "1.0.0",
       "author": "CLAW Team",
       "tags": [
@@ -17,7 +17,7 @@
     },
     {
       "name": "skill-validator",
-      "path": "skills\\skill-validator\\SKILL.md",
+      "path": "skills/skill-validator/SKILL.md",
       "description": "验证和规范化技能文件的格式、结构和内容。发现问题时需用户确认后再修复。",
       "version": "1.0.0",
       "author": "CLAW Team",
@@ -30,8 +30,8 @@
     },
     {
       "name": "skills-creator",
-      "path": "skills\\skills-creator\\SKILL.md",
-      "description": "定义CLAW项目自定义技能的标准格式和规范。AI agent在创建技能时必须遵循此规范。",
+      "path": "skills/skills-creator/SKILL.md",
+      "description": "定义并创建本项目技能的标准格式与流程。当 skills-index 无匹配技能、需新增重复任务或标准化流程或封装专业知识时使用；创建后须经 skill-validator 校验并写入 skills-index。",
       "version": "1.0.0",
       "author": "CLAW Team",
       "tags": [
@@ -43,7 +43,7 @@
     },
     {
       "name": "memory-reader",
-      "path": "skills\\memory-reader\\SKILL.md",
+      "path": "skills/memory-reader/SKILL.md",
       "description": "读取和管理CLAW项目的记忆系统，包括长期记忆、短期记忆和工作记忆。支持按关键词检索、按类型过滤、获取摘要等功能。",
       "version": "1.0.0",
       "author": "CLAW Team",
@@ -56,7 +56,7 @@
     },
     {
       "name": "task-evolution-executor",
-      "path": "skills\\task-evolution-executor\\SKILL.md",
+      "path": "skills/task-evolution-executor/SKILL.md",
       "description": "在单次任务执行过程中集成任务处理、记忆迭代和自主进化。负责协调任务执行的完整生命周期，包括准备、执行、记忆迭代和进化评估四个阶段。",
       "version": "1.0.0",
       "author": "CLAW Team",
@@ -72,7 +72,7 @@
     },
     {
       "name": "memory-iteration-manager",
-      "path": "skills\\memory-iteration-manager\\SKILL.md",
+      "path": "skills/memory-iteration-manager/SKILL.md",
       "description": "管理CLAW项目的记忆迭代过程，包括信息提炼、记忆更新、流转规则执行和关联建立。负责在任务完成后自动执行记忆系统的迭代优化。",
       "version": "1.0.0",
       "author": "CLAW Team",
@@ -88,7 +88,7 @@
     },
     {
       "name": "xialiao-integration",
-      "path": "skills\\xialiao-integration\\SKILL.md",
+      "path": "skills/xialiao-integration/SKILL.md",
       "description": "虾聊社区集成技能，提供AI Agent专属社交网络的交互功能，包括注册、发帖、评论、点赞和心跳机制",
       "version": "1.0.0",
       "author": "CLAW Team",

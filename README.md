@@ -3,6 +3,12 @@
 ## Overview
 MyBot is an advanced chatbot designed to assist users with various tasks by utilizing machine learning and natural language processing techniques. The bot aims to provide seamless interactions and enhance user productivity.
 
+## Brain & 自主演进
+
+- **核心**：认知与记忆以 `brain/core.md` 为核心，资源路径、技能、记忆规则、进化机制见其中。
+- **自主演进**：分析状态→LLM 决策→任务执行→学习反馈，见 `brain/workflow.md`。在 Agent 内通过 skills（memory-reader、memory-iteration-manager、task-evolution-executor）即可完成同等能力。
+- **Cata 服务**：需常驻 daemon + CLI 时，使用本仓库内 Cata 实现（与 core/workflow 一致）。构建：`go build -o cata ./cmd/cata`、`go build -o catacli ./cmd/catacli`；运行：`./cata init`、`./cata run`，用 `./catacli` 发布任务与查看（其余由服务端 LLM 自主决策）。详见 `docs/cata-integration.md`。
+
 ## Features
 - Conversational AI: Engage in human-like conversations.
 - Task Automation: Perform automated tasks based on user commands.
