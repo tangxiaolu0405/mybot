@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -25,116 +26,179 @@ type Response struct {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+	// 检查是否有命令行参数
+	if len(os.Args) >= 2 {
+		// 如果有参数，直接执行命令（保持向后兼容）
+		command := os.Args[1]
+		
+		// help 命令不需要连接服务器
+		if command == "help" || command == "--help" || command == "-h" {
+			printUsage()
+			os.Exit(0)
+		}
+		
+		// 检查是否是交互式模式
+		if command == "interactive" {
+			interactiveMode()
+			os.Exit(0)
+		}
+		
+		// 执行单命令模式
+		err := executeCommand(os.Args[1:])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	
+	// 默认进入交互式模式
+	interactiveMode()
+}
+
+// interactiveMode 交互式模式，类似于 bash 终端
+func interactiveMode() {
+	fmt.Println("=== Cata Interactive Mode ===")
+	fmt.Println("Type commands (type 'exit;' to quit)")
+	fmt.Println("Available commands: task, skill, ping, help")
+	fmt.Println()
+
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Print("cata> ")
+		if !scanner.Scan() {
+			break
+		}
+
+		input := scanner.Text()
+		input = strings.TrimSpace(input)
+
+		// 检查是否退出
+		if input == "exit;" {
+			fmt.Println("Exiting interactive mode...")
+			break
+		}
+
+		// 解析命令
+		args := strings.Fields(input)
+		if len(args) == 0 {
+			continue
+		}
+
+		// 执行命令
+		err := executeCommand(args)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+		}
+		
+		fmt.Println()
 	}
 
-	command := os.Args[1]
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("Error reading input: %v\n", err)
+	}
+}
+
+// executeCommand 执行命令
+func executeCommand(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("no command provided")
+	}
+
+	command := args[0]
 
 	// help 命令不需要连接服务器
 	if command == "help" || command == "--help" || command == "-h" {
 		printUsage()
-		os.Exit(0)
+		return nil
 	}
 
 	// 连接到服务器
 	conn, err := connectToServer()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: Failed to connect to server: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Make sure the server is running with 'cata run'\n")
-		os.Exit(1)
+		return fmt.Errorf("failed to connect to server: %v\nMake sure the server is running with 'cata run'", err)
 	}
 	defer conn.Close()
 
 	// 处理命令（仅保留：发布任务、查看、ping；其余由 cataserver 内 LLM 自主决策）
 	var req Request
+	var cmdType string
+	
 	switch command {
 	case "task":
-		if len(os.Args) < 3 {
-			fmt.Fprintf(os.Stderr, "Error: task requires a subcommand\n")
-			fmt.Fprintf(os.Stderr, "Usage: catacli task <create|list|status> [args]\n")
-			os.Exit(1)
+		if len(args) < 2 {
+			return fmt.Errorf("task requires a subcommand\nUsage: task <create|list|status> [args]")
 		}
 		req = Request{
 			Command: "task",
-			Args:    os.Args[2:],
+			Args:    args[1:],
 		}
+		cmdType = "task"
 
 	case "ping":
 		req = Request{
 			Command: "ping",
 			Args:    []string{},
 		}
+		cmdType = "ping"
 
 	case "skill":
-		if len(os.Args) < 3 {
-			fmt.Fprintf(os.Stderr, "Error: skill requires a subcommand\n")
-			fmt.Fprintf(os.Stderr, "Usage: catacli skill <list|get <name>>\n")
-			os.Exit(1)
+		if len(args) < 2 {
+			return fmt.Errorf("skill requires a subcommand\nUsage: skill <list|get <name>>")
 		}
-		skillSub := os.Args[2]
+		skillSub := args[1]
 		switch skillSub {
 		case "list":
 			req = Request{Command: "skill_list", Args: []string{}}
-			command = "skill_list"
+			cmdType = "skill_list"
 		case "get":
-			if len(os.Args) < 4 {
-				fmt.Fprintf(os.Stderr, "Error: skill get requires skill name\n")
-				fmt.Fprintf(os.Stderr, "Usage: catacli skill get <skill-name>\n")
-				os.Exit(1)
+			if len(args) < 3 {
+				return fmt.Errorf("skill get requires skill name\nUsage: skill get <skill-name>")
 			}
-			req = Request{Command: "skill_get", Args: os.Args[3:4]}
-			command = "skill_get"
+			req = Request{Command: "skill_get", Args: args[2:3]}
+			cmdType = "skill_get"
 		default:
-			fmt.Fprintf(os.Stderr, "Error: unknown skill subcommand: %s\n", skillSub)
-			fmt.Fprintf(os.Stderr, "Usage: catacli skill <list|get <name>>\n")
-			os.Exit(1)
+			return fmt.Errorf("unknown skill subcommand: %s\nUsage: skill <list|get <name>>", skillSub)
 		}
 
 	default:
-		fmt.Fprintf(os.Stderr, "Error: Unknown command: %s\n", command)
-		printUsage()
-		os.Exit(1)
+		return fmt.Errorf("unknown command: %s\nUse 'help' for available commands", command)
 	}
 
 	// 发送请求
 	reqData, err := json.Marshal(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: Failed to marshal request: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to marshal request: %v", err)
 	}
 
 	if _, err := conn.Write(append(reqData, '\n')); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: Failed to send request: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to send request: %v", err)
 	}
 
 	// 读取响应
 	scanner := bufio.NewScanner(conn)
 	if !scanner.Scan() {
-		fmt.Fprintf(os.Stderr, "Error: Failed to read response\n")
-		os.Exit(1)
+		return fmt.Errorf("failed to read response")
 	}
 
 	var resp Response
 	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: Failed to parse response: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to parse response: %v", err)
 	}
 
 	// 输出结果
 	if resp.Success {
 		if resp.Data != nil {
 			// 格式化输出数据
-			outputData(resp.Data, command)
+			outputData(resp.Data, cmdType)
 		} else {
 			fmt.Println(resp.Message)
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", resp.Message)
-		os.Exit(1)
+		return fmt.Errorf("%s", resp.Message)
 	}
+
+	return nil
 }
 
 func connectToServer() (net.Conn, error) {
@@ -413,27 +477,29 @@ func outputData(data interface{}, command string) {
 }
 
 func printUsage() {
-	fmt.Println("Cata CLI - 仅用于向 Cata 服务发布任务与查看（其余能力由 cataserver 内 LLM 自主决策）")
+	fmt.Println("Cata CLI - 交互式命令行工具")
 	fmt.Println()
-	fmt.Println("Usage: catacli <command> [arguments]")
+	fmt.Println("Usage: catacli [command] [arguments]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  task create \"<需求描述>\" [--async]  Create task by requirement; cata parses and runs (--async = queue for server)")
+	fmt.Println("  task create \"<需求描述>\" [--async]  Create task by requirement")
 	fmt.Println("  task create <type> [args...] [--async]  Or by type: summarize, consolidate, recall, learn, optimize, reflect, idle, integrate")
 	fmt.Println("  task list                       List recent tasks")
 	fmt.Println("  task status <task-id>          Show task status")
-	fmt.Println("  skill list                      List skills (registry + skills-index); implemented=true = server, false = MD only (agent)")
-	fmt.Println("  skill get <name>                Get SKILL.md content for agent to execute (MD skills)")
+	fmt.Println("  skill list                      List skills")
+	fmt.Println("  skill get <name>                Get SKILL.md content")
 	fmt.Println("  ping                            Check server connection")
+	fmt.Println("  interactive                     Start interactive mode")
 	fmt.Println("  help                            Show this help message")
+	fmt.Println()
+	fmt.Println("Interactive Mode:")
+	fmt.Println("  Run 'catacli' without arguments to enter interactive mode")
+	fmt.Println("  Type 'exit;' to quit interactive mode")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  catacli task create \"帮我整理本周记忆摘要\"")
-	fmt.Println("  catacli task create summarize --async")
 	fmt.Println("  catacli task list")
-	fmt.Println("  catacli task status <task-id>")
 	fmt.Println("  catacli skill list")
-	fmt.Println("  catacli skill get memory-reader")
 	fmt.Println("  catacli ping")
 	fmt.Println()
 	fmt.Println("Note: Run 'cata run' first to start the server.")
