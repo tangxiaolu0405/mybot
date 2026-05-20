@@ -60,7 +60,6 @@ func printConfigUsage() {
 	fmt.Println("  cata config set llm.api_key sk-xxx")
 	fmt.Println("  cata config set llm.api_url https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
 	fmt.Println("  cata config set llm.model qwen-turbo")
-	fmt.Println("  cata config set evolution.enabled false")
 }
 
 func handleConfigShow() {
@@ -159,8 +158,26 @@ func getConfigValue(cfg *config.AppConfig, key string) interface{} {
 		return cfg.Evolution.Enabled
 	case "evolution.cycle_interval":
 		return cfg.Evolution.CycleInterval
-	case "evolution.task_queue_interval":
-		return cfg.Evolution.TaskQueueInterval
+	case "evolution.context_compress_ratio":
+		return cfg.Evolution.ContextCompressRatio
+	case "llm.context_window":
+		return cfg.LLM.ContextWindow
+	case "exec.enabled":
+		return cfg.Exec.Enabled
+	case "exec.require_confirm":
+		return cfg.Exec.RequireConfirm
+	case "exec.timeout_seconds":
+		return cfg.Exec.TimeoutSeconds
+	case "exec.max_output_bytes":
+		return cfg.Exec.MaxOutputBytes
+	case "exec.working_dir":
+		return cfg.Exec.WorkingDir
+	case "workspace_files.enabled":
+		return cfg.WorkspaceFilesEnabled()
+	case "workspace_files.max_read_bytes":
+		return cfg.WorkspaceFiles.MaxReadBytes
+	case "workspace_files.max_write_bytes":
+		return cfg.WorkspaceFiles.MaxWriteBytes
 	default:
 		return nil
 	}
@@ -208,12 +225,51 @@ func setConfigValue(cfg *config.AppConfig, key, value string) error {
 			return fmt.Errorf("invalid integer value: %s", value)
 		}
 		cfg.Evolution.CycleInterval = v
-	case "evolution.task_queue_interval":
+	case "evolution.context_compress_ratio":
+		var v float64
+		if _, err := fmt.Sscanf(value, "%f", &v); err != nil {
+			return fmt.Errorf("invalid float value: %s", value)
+		}
+		cfg.Evolution.ContextCompressRatio = v
+	case "llm.context_window":
 		var v int
 		if _, err := fmt.Sscanf(value, "%d", &v); err != nil {
 			return fmt.Errorf("invalid integer value: %s", value)
 		}
-		cfg.Evolution.TaskQueueInterval = v
+		cfg.LLM.ContextWindow = v
+	case "exec.enabled":
+		cfg.Exec.Enabled = value == "true" || value == "1"
+	case "exec.require_confirm":
+		cfg.Exec.RequireConfirm = value == "true" || value == "1"
+	case "exec.timeout_seconds":
+		var v int
+		if _, err := fmt.Sscanf(value, "%d", &v); err != nil {
+			return fmt.Errorf("invalid integer value: %s", value)
+		}
+		cfg.Exec.TimeoutSeconds = v
+	case "exec.max_output_bytes":
+		var v int
+		if _, err := fmt.Sscanf(value, "%d", &v); err != nil {
+			return fmt.Errorf("invalid integer value: %s", value)
+		}
+		cfg.Exec.MaxOutputBytes = v
+	case "exec.working_dir":
+		cfg.Exec.WorkingDir = value
+	case "workspace_files.enabled":
+		on := value == "true" || value == "1"
+		cfg.WorkspaceFiles.Enabled = &on
+	case "workspace_files.max_read_bytes":
+		var v int
+		if _, err := fmt.Sscanf(value, "%d", &v); err != nil {
+			return fmt.Errorf("invalid integer value: %s", value)
+		}
+		cfg.WorkspaceFiles.MaxReadBytes = v
+	case "workspace_files.max_write_bytes":
+		var v int
+		if _, err := fmt.Sscanf(value, "%d", &v); err != nil {
+			return fmt.Errorf("invalid integer value: %s", value)
+		}
+		cfg.WorkspaceFiles.MaxWriteBytes = v
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}

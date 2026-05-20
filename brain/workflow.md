@@ -1,78 +1,66 @@
-本文件定义了系统的**闭环进化逻辑**。所有任务执行必须锚定此流程，确保从单纯的“响应”转变为“成长”。
+# Workflow（演进与维护 SOP）
 
-## 1. 流程全景图
+本文件与 `core.md` 的演进章节一致：**把一次「响应」变成可累积的「成长」**，并保证 **下一次 AI 读到的文档更准**。
 
-系统遵循 **感知(Observe) → 决策(Orient/Decide) → 执行(Act) → 反思(Reflect)** 的循环。
+## 1. 闭环（OODA）
 
----
+**Observe** → **Orient / Decide** → **Act** → **Reflect**
 
-## 2. 核心阶段详解
+| 阶段 | 做什么 | 产出 |
+|------|--------|------|
+| 分析 | 读 hot/short/long/archive 体量、evolution_log 近项 | `Snapshot`（`internal/evolve` Observe） |
+| 决策 | 基于状态选单一主行动 | JSON：action、reason、learning、updates[] |
+| 执行 | **文档补丁** 写入 `~/.cata/brain/` | 改 hot / short / long / core / workflow（白名单路径） |
+| 反思 | 对照预期，**必须落盘** | 追加 `evolution_log.json`；learning 回答 workflow §4 三问 |
 
-### 第一阶段：分析状态 (Analyze System State)
+## 2. 决策启发（非硬编码 cron）
 
-在任何演进周期开始前，必须读取以下数据点生成 `SystemState`：
+- archive 文件多且缺月度摘要 → **summarize**  
+- 零散结论需固化身份/偏好 → **consolidate**（指向 hot 或 archive）  
+- 同类失败 ≥2 → **reflect**，并考虑改 **hot.md** 禁忌或 **core.md** 一条规则  
+- 复杂任务稳定成功 → 提炼 **Pattern** 入长期记忆  
 
-* **记忆状态**：扫描 `brain/archive/` 大小，检查 `memory_index.json` 的冗余度，确认 `hot.md` 的时效性。
-* **任务状态**：从 `evolution_log.json` 提取最近 10 次任务的成功/失败分布。
-* **能力状态**：识别用户最近频繁触达但当前 `skills/` 缺失的领域。
+（阈值由 Observe 快照 + LLM 判断；周期由 `evolution.cycle_interval` 驱动，**无单独 cron 二进制**。）
 
-### 第二阶段：LLM 决策与 ActionPlan
+## 3. 任务类型（执行要点）
 
-基于状态，系统必须输出一个结构化的 `ActionPlan`：
+- **summarize**：压缩 archive，更新 summary 与索引。  
+- **consolidate**：把会话/长期中的稳定结论写入 hot 或按日 archive。  
+- **recall**：检索长期与索引。  
+- **learn / optimize / reflect**：新技能、索引优化、规则反思；**reflect 必须连接「文档更新」**（见下）。  
+- **idle**：明确记录「无需行动」及原因。
 
-> **示例决策逻辑**：如果 `archive` 文件超过 5 个且未汇总 $\rightarrow$ 执行 `summarize`；如果某项错误连续出现 3 次 $\rightarrow$ 执行 `reflect` 并修改 `hot.md`。
+## 4. 学习反馈（必答三问）
 
-### 第三阶段：任务转换与执行 (Task Execution)
+1. 与预期的偏差？  
+2. 是否有应写入 **长期** 的通用实践？  
+3. 是否需要改 **core / workflow** 的权重或规则（一条即可，避免泛泛重写）？
 
-将 `ActionPlan` 分解为原子化任务写入 `task_queue.json`。
+## 5. 下一轮提升（**更新核心文档**）
 
-* **Recall**：从长期记忆中捞取相关模式。
-* **Learn**：调用 `skills-creator` 构建新工具。
-* **Consolidate**：将零散的知识固化为规则。
+当反思结论 **稳定、可复用** 时，**至少做一项**（由人或 Agent 落盘）：
 
-### 第四阶段：学习反馈 (Learning & Feedback)
+1. **evolution_log.json**：追加一条（timestamp、action、reason、status、learning、doc_touched）。  
+2. **hot.md**：更新目标、偏好、禁忌、技术栈一句——**下一轮注入最直接**。  
+3. **core.md 或 workflow.md**：仅当规则级变更；**单行补丁式**增补，不删路径表、不破坏与 `paths.go` 的一致性。
 
-**这是演进的关键点**。任务完成后必须回答：
+这样下一次会话在 **boot → hot → 节选 core/workflow** 链路上会自动变强。
 
-1. 本次执行与预期结果的偏差是什么？
-2. 是否有新的“最佳实践”需要写入长期记忆？
-3. 是否需要调整 `brain/core.md` 中的决策权重？
-
----
-
-## 3. 自发性触发阈值 (Triggers)
-
-| 触发源 | 阈值条件 | 对应行动 |
-| --- | --- | --- |
-| **时间触发** | 每 24 小时 | 执行 `summarize` 与 `backup` |
-| **记忆触发** | 短期记忆条目 > 20 条 | 启动 `memory-iteration-manager` 进行提升/归档 |
-| **错误触发** | 同类 Error 出现次数 $\ge$ 2 | 强制执行 `reflect`（反思）并更新核心思维 |
-| **成功触发** | 复杂任务高分完成 | 提取 `Pattern`（模式）并存入 `long-term` |
-
----
-
-## 4. 演进日志格式 (Evolution Log)
-
-所有演进记录必须严格遵守 `brain/evolution_log.json` 的格式，以便后续自检：
+## 6. 演进日志示例
 
 ```json
 {
-  "timestamp": "2026-02-25T19:40:00Z",
-  "action": "optimize",
-  "decision": "Detected redundant coding patterns in Python tasks.",
+  "timestamp": "2026-05-11T12:00:00Z",
+  "action": "reflect",
+  "reason": "Short-term memory grew past threshold.",
   "status": "completed",
-  "learning": "Consolidated 'FastAPI-auth-template' into long-term memory to reduce redundant generation by 40%.",
-  "next_steps": ["Update skills-index to include the new template."]
+  "learning": "Consolidated session notes into memory/long-term/patterns.md; hot unchanged.",
+  "doc_touched": ["memory/short-term/current_session.md", "memory/long-term/patterns.md"]
 }
-
 ```
 
----
+## 7. 演进守则（三条）
 
-## 5. 进化守则 (The Evolution Creed)
-
-1. **绝不遗忘教训**：失败的尝试必须转化为“风险警告”存入热记忆。
-2. **动态剪枝**：过时的技能和错误的记忆比没有记忆更危险，必须定期执行 `optimize` 淘汰。
-3. **一致性优先**：新进化的规则不得与 `brain/core.md` 的根原则冲突，除非发起“核心重构”。
-
----
+1. **失败要进记忆**：风险写 hot 或长期，不只在聊天里消失。  
+2. **剪枝**：过时规则与错误记忆优先 optimize / 归档。  
+3. **不违背 core 根原则**；若要改根原则，必须在 evolution_log 写「核心变更」并最小 diff 改文档。

@@ -2,122 +2,123 @@
 package brain
 
 import (
+	"os"
 	"path/filepath"
 
 	"mybot/internal/config"
 )
 
-// 以下常量与 brain/core.md「资源路径」表一一对应，修改时请同步更新 core.md。
-
+// 仓库模板 brain/ 内相对路径（种子来源）。
 const (
-	// RelPathBootLeader 系统初始化引导
 	RelPathBootLeader = "boot-leader.md"
-	// RelPathCore 核心思维
-	RelPathCore = "core.md"
-	// RelPathWorkflow 自主演进流程
-	RelPathWorkflow = "workflow.md"
-	// RelPathHot 热记忆
-	RelPathHot = "hot.md"
-	// RelPathMemoryIndex 记忆索引
+	RelPathCore       = "core.md"
+	RelPathWorkflow   = "workflow.md"
+	RelPathHot        = "hot.md"
 	RelPathMemoryIndex = "memory_index.json"
-	// RelPathEvolutionLog 演进日志
 	RelPathEvolutionLog = "evolution_log.json"
-	// RelPathTaskQueue 任务队列
 	RelPathTaskQueue = "task_queue.json"
-	// RelPathCapabilities 能力记录（workflow 可选）
 	RelPathCapabilities = "capabilities.json"
-	// RelPathArchive archive 目录
 	RelPathArchive = "archive"
-	// RelPathShortTermCurrent 短期记忆当前会话
 	RelPathShortTermCurrent = "memory/short-term/current_session.md"
-	// RelPathLongTerm 长期记忆目录
 	RelPathLongTerm = "memory/long-term"
-	// RelPathHeartbeatState 心跳状态
 	RelPathHeartbeatState = "memory/short-term/heartbeat-state.json"
+	RelPathLearnSystemPrompt = "context/learn_system_prompt.md"
+	RelPathTodo = "todo.md"
 )
 
-// 技能相关路径在项目根（BaseDir），与 core.md「技能目录 / 技能索引」一致。
-const (
-	// RelPathSkillsDir 技能目录（相对于 BaseDir）
-	RelPathSkillsDir = "skills"
-	// RelPathSkillsIndex 技能索引（相对于 BaseDir）
-	RelPathSkillsIndex = "skills/skills-index.json"
-)
-
-// Dir 返回 brain 目录绝对路径。
+// Dir 返回 brain 根（~/.cata/brain），兼容旧代码。
 func Dir() string {
-	return config.GetBrainDir()
+	return brainRoot()
 }
 
-// BaseDir 返回项目根目录（用于 skills、git 等）。
+// BaseDir 返回项目根（用于 run_command 等）。
 func BaseDir() string {
 	return config.GetBrainBaseDir()
 }
 
-// Path 返回 brain 内相对路径的绝对路径。
+// Path 在活跃 workspace 下解析相对路径；无 workspace 时回退到 legacy brain 根。
 func Path(rel string) string {
-	return filepath.Join(Dir(), rel)
+	if w := Active(); w != nil {
+		return w.Path(rel)
+	}
+	return filepath.Join(brainRoot(), rel)
 }
 
-// BootLeaderPath 返回 boot-leader.md 绝对路径。
+// BootLeaderPath 全局启动组装说明。
 func BootLeaderPath() string {
-	return Path(RelPathBootLeader)
+	p := filepath.Join(globalDir(), FileGlobalBoot)
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	return filepath.Join(brainRoot(), RelPathBootLeader)
 }
 
-// HotPath 热记忆文件路径。
+// HotPath 当前 workspace 活跃 mode 的 persona。
 func HotPath() string {
-	return Path(RelPathHot)
+	if w := Active(); w != nil {
+		return w.PersonaPath()
+	}
+	return filepath.Join(brainRoot(), RelPathHot)
 }
 
-// ArchiveDir 返回 archive 目录绝对路径。
+// ArchiveDir 当前 workspace 的 archive。
 func ArchiveDir() string {
-	return Path(RelPathArchive)
+	if w := Active(); w != nil {
+		return w.ArchiveDir()
+	}
+	return filepath.Join(brainRoot(), RelPathArchive)
 }
 
-// MemoryIndexPath 记忆索引文件路径。
-func MemoryIndexPath() string {
-	return Path(RelPathMemoryIndex)
-}
-
-// EvolutionLogPath 演进日志文件路径。
+// EvolutionLogPath 当前 workspace 的演进日志。
 func EvolutionLogPath() string {
-	return Path(RelPathEvolutionLog)
+	if w := Active(); w != nil {
+		return w.EvolutionLogPath()
+	}
+	return filepath.Join(brainRoot(), RelPathEvolutionLog)
 }
 
-// TaskQueuePath 任务队列文件路径。
-func TaskQueuePath() string {
-	return Path(RelPathTaskQueue)
-}
-
-// CapabilitiesPath 能力记录文件路径。
-func CapabilitiesPath() string {
-	return Path(RelPathCapabilities)
-}
-
-// ShortTermCurrentPath 短期记忆当前会话文件路径。
+// ShortTermCurrentPath 当前 workspace 短期记忆。
 func ShortTermCurrentPath() string {
-	return Path(RelPathShortTermCurrent)
+	if w := Active(); w != nil {
+		return w.ShortTermPath()
+	}
+	return filepath.Join(brainRoot(), RelPathShortTermCurrent)
 }
 
-// LongTermDir 长期记忆目录路径。
+// LearnSystemPromptPath legacy。
+func LearnSystemPromptPath() string {
+	return filepath.Join(brainRoot(), RelPathLearnSystemPrompt)
+}
+
+// LongTermDir 当前 workspace 长期记忆目录。
 func LongTermDir() string {
-	return Path(RelPathLongTerm)
+	if w := Active(); w != nil {
+		return w.LongTermDir()
+	}
+	return filepath.Join(brainRoot(), RelPathLongTerm)
 }
 
-// SkillsDir 返回技能目录绝对路径（位于项目根下）。
-func SkillsDir() string {
-	return filepath.Join(BaseDir(), RelPathSkillsDir)
+// GlobalConstraintsPath 全局约束。
+func GlobalConstraintsPath() string {
+	return filepath.Join(globalDir(), FileGlobalConstraints)
 }
 
-// SkillsIndexPath 返回 skills-index.json 绝对路径。
-func SkillsIndexPath() string {
-	return filepath.Join(BaseDir(), RelPathSkillsIndex)
+// GlobalBehaviorPath 全局行为 SOP。
+func GlobalBehaviorPath() string {
+	return filepath.Join(globalDir(), FileGlobalBehavior)
 }
 
-// ArchiveSummaryFilename 返回周期摘要文件名格式 summary-YYYY-MM.md。
+// PersonaLocalPath 当前 workspace 项目说明。
+func PersonaLocalPath() string {
+	if w := Active(); w != nil {
+		return w.PersonaLocalPath()
+	}
+	return filepath.Join(brainRoot(), RelPersonaLocal)
+}
+
+// ArchiveSummaryFilename 返回周期摘要文件名。
 func ArchiveSummaryFilename(yearMonth string) string {
 	return "summary-" + yearMonth + ".md"
 }
 
-// ArchiveBackupDir archive 备份子目录名。
 const ArchiveBackupDir = "backup"

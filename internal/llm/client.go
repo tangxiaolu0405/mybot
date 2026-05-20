@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,7 +26,56 @@ const (
 	DefaultMaxTokens = 2000
 	// DefaultTimeout 默认超时时间
 	DefaultTimeout = 60 * time.Second
+
+	// 注入 API 的 brain 节选（core/workflow/hot）字节上限，减轻每轮请求的输入 token
+	maxBrainExcerptBytesPerFile = 6500
+	maxBrainExcerptBytesTotal  = 20000
+	// boot-leader 正文码点上限（单文件过大时截断）
+	maxBootLeaderRunes = 10000
+
 )
+
+// truncateRunes 按 Unicode 码点截断（仅用于发往 API 的 boot-leader 体积控制，不用于 llm.log）。
+func truncateRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 || s == "" {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "\n…(truncated)"
+}
+
+// cloneMessagesForLLMLog 深拷贝消息列表，供 llm.log 原样记录（不截断、不压缩正文）。
+func cloneMessagesForLLMLog(msgs []Message) []Message {
+	out := make([]Message, len(msgs))
+	for i, m := range msgs {
+		out[i] = m
+		if len(m.ToolCalls) > 0 {
+			out[i].ToolCalls = append([]ToolCall(nil), m.ToolCalls...)
+		}
+	}
+	return out
+}
+
+// compactMessageContentForAPI 压缩发往模型的 system/user 正文中连续空行，降低换行 token。
+func compactMessageContentForAPI(msgs []Message) []Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	out := make([]Message, len(msgs))
+	for i, m := range msgs {
+		out[i] = m
+		switch m.Role {
+		case "system", "user":
+			if m.Content != "" {
+				out[i].Content = brain.CompactExcessiveNewlines(m.Content)
+			}
+		}
+	}
+	return out
+}
 
 // Client LLM 客户端
 type Client struct {
@@ -44,10 +94,8 @@ type Role string
 const (
 	RoleDefault   Role = "default"
 	RoleChat      Role = "chat"
-	RoleSummarize Role = "summarize"
-	RoleIndex     Role = "index"
-	RoleCompress  Role = "compress"
 	RoleEvolution Role = "evolution"
+	RoleSummarize Role = "summarize" // 保留供后续扩展
 )
 
 var (
@@ -64,7 +112,8 @@ func loadBootLeaderPrompt() string {
 			log.Printf("Warning: failed to read boot-leader.md from %s: %v", path, err)
 			return
 		}
-		bootLeaderPrompt = string(data)
+		s := brain.CompactExcessiveNewlines(strings.TrimSpace(string(data)))
+		bootLeaderPrompt = truncateRunes(s, maxBootLeaderRunes)
 	})
 	return bootLeaderPrompt
 }
@@ -74,17 +123,45 @@ func loadBootLeaderPrompt() string {
 func withBootLeaderSystemMessage(messages []Message) []Message {
 	prompt := strings.TrimSpace(loadBootLeaderPrompt())
 	if prompt == "" {
-		return messages
+		return ensureCataBrainExcerptSystem(messages)
 	}
 
 	if len(messages) > 0 && messages[0].Role == "system" && strings.TrimSpace(messages[0].Content) == prompt {
-		return messages
+		return ensureCataBrainExcerptSystem(messages)
 	}
 
 	out := make([]Message, 0, len(messages)+1)
 	out = append(out, Message{Role: "system", Content: prompt})
 	out = append(out, messages...)
-	return out
+	return ensureCataBrainExcerptSystem(out)
+}
+
+// ensureCataBrainExcerptSystem 在 boot-leader 之后插入路径块 + 脑子节选（若尚未存在）。
+// 在 withBootLeaderSystemMessage 末尾调用，使所有 LLM 请求（终端、演进、摘要等）与 llm.log 一致。
+func ensureCataBrainExcerptSystem(msgs []Message) []Message {
+	for _, m := range msgs {
+		if m.Role != "system" {
+			continue
+		}
+		c := strings.TrimSpace(m.Content)
+		if strings.HasPrefix(c, brain.TerminalPathsSystemPrefix) ||
+			strings.HasPrefix(c, brain.TerminalBundleSystemPrefix) {
+			return msgs
+		}
+	}
+	ext := brain.TerminalBrainSystemExtension(maxBrainExcerptBytesPerFile, maxBrainExcerptBytesTotal)
+	if strings.TrimSpace(ext) == "" {
+		return msgs
+	}
+	pack := ext
+	if len(msgs) >= 1 && msgs[0].Role == "system" {
+		out := make([]Message, 0, len(msgs)+1)
+		out = append(out, msgs[0])
+		out = append(out, Message{Role: "system", Content: pack})
+		out = append(out, msgs[1:]...)
+		return out
+	}
+	return append([]Message{{Role: "system", Content: pack}}, msgs...)
 }
 
 // resolveModelForRole 根据全局配置与角色解析应使用的模型名称。
@@ -292,10 +369,15 @@ func NewClientWithProvider(apiKey, apiURL, model, provider string, maxTokens int
 	}
 }
 
-// Message 消息结构
+// Message 消息结构（兼容 OpenAI Chat：含 tool_calls / tool 角色）
 type Message struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content string `json:"content,omitempty"`
+	// 助手消息携带的工具调用（发给 API 的历史轮次）
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// role=tool 时必填
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	Name       string `json:"name,omitempty"`
 }
 
 // ChatRequest 聊天请求
@@ -307,6 +389,7 @@ type ChatRequest struct {
 	// Tools / ToolChoice 用于 OpenAI 风格的 tool calling（可选）
 	Tools      []Tool      `json:"tools,omitempty"`
 	ToolChoice interface{} `json:"tool_choice,omitempty"`
+	Stream     bool        `json:"stream,omitempty"`
 }
 
 // ChatResponse 聊天响应
@@ -353,7 +436,7 @@ func (c *Client) Summarize(content string, instructions string) (string, error) 
 		Temperature: 0.3, // 较低温度以获得更一致的摘要
 	}
 
-	resp, _, err := c.chat(req, nil, "")
+	resp, _, err := c.chat(req, nil, "", false)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate summary: %w", err)
 	}
@@ -408,7 +491,7 @@ func (c *Client) PreprocessQuery(query string) (*QueryPreprocessResult, error) {
 		Temperature: 0.3,
 	}
 
-	resp, _, err := c.chat(req, nil, "")
+	resp, _, err := c.chat(req, nil, "", false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to preprocess query: %w", err)
 	}
@@ -499,7 +582,7 @@ func (c *Client) Chat(messages []Message) (string, error) {
 		Temperature: 0.7,
 	}
 
-	resp, _, err := c.chat(req, nil, "")
+	resp, _, err := c.chat(req, nil, "", false)
 	if err != nil {
 		return "", fmt.Errorf("failed to chat: %w", err)
 	}
@@ -513,6 +596,34 @@ func (c *Client) Chat(messages []Message) (string, error) {
 		return "", fmt.Errorf("no response from LLM")
 	}
 
+	return resp.Choices[0].Message.Content, nil
+}
+
+// evolutionMaxTokens 自主演进决策 JSON 的输出上限（控制成本）。
+const evolutionMaxTokens = 1024
+
+// ChatEvolution 演进专用：不注入 boot-leader/brain 节选，低温度、限制 max_tokens，不写 llm.log。
+func (c *Client) ChatEvolution(messages []Message) (string, error) {
+	maxTok := evolutionMaxTokens
+	if c.maxTokens > 0 && c.maxTokens < maxTok {
+		maxTok = c.maxTokens
+	}
+	req := ChatRequest{
+		Model:       c.model,
+		Messages:    messages,
+		MaxTokens:   maxTok,
+		Temperature: 0.2,
+	}
+	resp, _, err := c.chat(req, nil, "", true)
+	if err != nil {
+		return "", fmt.Errorf("evolution chat: %w", err)
+	}
+	if resp.Error != nil {
+		return "", fmt.Errorf("API error: %s", resp.Error.Message)
+	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("no response from LLM")
+	}
 	return resp.Choices[0].Message.Content, nil
 }
 
@@ -533,7 +644,7 @@ func (c *Client) ChatWithTools(messages []Message, tools []Tool, toolChoice stri
 		Temperature: temperature,
 	}
 
-	resp, toolCalls, err := c.chat(req, tools, toolChoice)
+	resp, toolCalls, err := c.chat(req, tools, toolChoice, false)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to chat with tools: %w", err)
 	}
@@ -550,22 +661,36 @@ func (c *Client) ChatWithTools(messages []Message, tools []Tool, toolChoice stri
 	return resp.Choices[0].Message.Content, toolCalls, nil
 }
 
-// chat 发送 HTTP 请求到 LLM API（内部统一入口）
-func (c *Client) chat(req ChatRequest, tools []Tool, toolChoice string) (*ChatResponse, []ToolCall, error) {
-	// 检查 API key 是否为空
+// buildHTTPChatRequest 构建 HTTP 请求（stream 为 true 时使用 SSE）。
+// injectBrain 为 true 时注入 boot-leader 与 brain 节选（终端对话）；演进模块应传 false。
+func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tools []Tool, toolChoice string, stream bool, injectBrain bool) (*http.Request, error) {
 	if c.apiKey == "" {
-		return nil, nil, fmt.Errorf("API key is empty")
+		return nil, fmt.Errorf("API key is empty")
 	}
+	if injectBrain {
+		req.Messages = compactMessageContentForAPI(withBootLeaderSystemMessage(req.Messages))
+	} else {
+		req.Messages = compactMessageContentForAPI(req.Messages)
+	}
+	log.Printf("LLM Request: URL=%s, Model=%s, Provider=%T, stream=%v, APIKey present=%v",
+		c.apiURL, c.model, c.provider, stream, c.apiKey != "")
 
-	// 在所有请求前统一注入 boot-leader.md 作为系统提示词
-	req.Messages = withBootLeaderSystemMessage(req.Messages)
+	httpReq, err := c.provider.BuildRequest(c.apiURL, c.apiKey, c.model, req.Messages, req.MaxTokens, req.Temperature, tools, toolChoice, stream)
+	if err != nil {
+		return nil, err
+	}
+	if ctx != nil {
+		httpReq = httpReq.WithContext(ctx)
+	}
+	if stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
+	}
+	return httpReq, nil
+}
 
-	// 记录实际使用的 URL 和配置（用于调试和排查问题）
-	log.Printf("LLM Request: URL=%s, Model=%s, Provider=%T, APIKey present=%v", 
-		c.apiURL, c.model, c.provider, c.apiKey != "")
-
-	// 使用 provider 构建请求（如传入 tools，则附带）
-	httpReq, err := c.provider.BuildRequest(c.apiURL, c.apiKey, c.model, req.Messages, req.MaxTokens, req.Temperature, tools, toolChoice)
+// chat 发送 HTTP 请求到 LLM API（内部统一入口）。skipAppendLog 为 true 时不写 llm.log（由调用方统一写）。
+func (c *Client) chat(req ChatRequest, tools []Tool, toolChoice string, skipAppendLog bool) (*ChatResponse, []ToolCall, error) {
+	httpReq, err := c.buildHTTPChatRequest(context.Background(), req, tools, toolChoice, false, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -644,7 +769,9 @@ func (c *Client) chat(req ChatRequest, tools []Tool, toolChoice string) (*ChatRe
 	}
 
 	// 将本次 LLM 交互写入可选的日志文件（通过 LLM_LOG_FILE 控制，避免影响正常 stdout 日志）。
-	c.appendLLMLog(req, tools, toolChoice, content, toolCalls, body)
+	if !skipAppendLog {
+		c.appendLLMLog(req, tools, toolChoice, content, toolCalls, body)
+	}
 
 	// 转换为 ChatResponse 格式（向后兼容）
 	chatResp := &ChatResponse{
@@ -667,36 +794,59 @@ func (c *Client) chat(req ChatRequest, tools []Tool, toolChoice string) (*ChatRe
 	return chatResp, toolCalls, nil
 }
 
-// appendLLMLog 将一次 LLM 调用追加写入到日志文件。
-// 日志文件由环境变量 LLM_LOG_FILE 控制；未设置则不写入文件。
-// 采用 JSON Lines 格式，便于后续分析与采样。
+// inferPromptSources 标注本条请求里各段 system，便于阅读 llm.log。
+func inferPromptSources(msgs []Message) []string {
+	var out []string
+	boot := strings.TrimSpace(loadBootLeaderPrompt())
+	i := 0
+	for i < len(msgs) && msgs[i].Role == "system" {
+		c := strings.TrimSpace(msgs[i].Content)
+		switch {
+		case boot != "" && c == boot:
+			out = append(out, "brain/boot-leader.md")
+		case strings.HasPrefix(c, brain.TerminalBundleSystemPrefix):
+			out = append(out, "brain/core+workflow+hot (server excerpt)")
+		default:
+			out = append(out, "system:other")
+		}
+		i++
+	}
+	return out
+}
+
+// appendLLMLog 将一轮 LLM 对话追加为一行 JSON（JSON Lines）。
+// 默认写入 prompt 组件清单（static 仅 chars/preview，conversation 仅末尾几条全文），避免每轮重复刷 boot-leader 全文。
+// 设置 LLM_LOG_VERBOSE=1 可恢复完整 messages/tools/raw_body。
+// 日志路径由环境变量 LLM_LOG_FILE 控制，默认 llm.log。
 func (c *Client) appendLLMLog(req ChatRequest, tools []Tool, toolChoice string, content string, toolCalls []ToolCall, rawBody []byte) {
-	logPath := os.Getenv("LLM_LOG_FILE")
-	if logPath == "" {
-		logPath = "llm.log"
+	logPath := brain.LLMLogPath()
+
+	msgsCopy := append([]Message(nil), req.Messages...)
+	effectiveMessages := withBootLeaderSystemMessage(msgsCopy)
+
+	respLog := map[string]interface{}{
+		"content": content,
+	}
+	if len(toolCalls) > 0 {
+		respLog["tool_calls"] = toolCalls
 	}
 
 	entry := map[string]interface{}{
-		"timestamp":   time.Now().Format(time.RFC3339),
-		"url":         c.apiURL,
-		"model":       c.model,
-		"messages":    req.Messages,
-		"max_tokens":  req.MaxTokens,
-		"temperature": req.Temperature,
-		"tools":       tools,
-		"tool_choice": toolChoice,
-		"response": map[string]interface{}{
-			"content":    content,
-			"tool_calls": toolCalls,
-		},
+		"timestamp":      time.Now().Format(time.RFC3339),
+		"kind":           "chat_round",
+		"url":            c.apiURL,
+		"model":          c.model,
+		"prompt_sources": inferPromptSources(effectiveMessages),
+		"prompt":         buildPromptManifest(effectiveMessages, tools, toolChoice, req.MaxTokens, req.Temperature),
+		"response":       respLog,
 	}
-
-	// 为避免日志文件过大，可选地截断原始响应体
-	const maxRawBodyBytes = 4096 * 4096
-	if len(rawBody) > 0 {
-		if len(rawBody) > maxRawBodyBytes {
-			entry["raw_body"] = string(rawBody[:maxRawBodyBytes]) + "..."
-		} else {
+	if llmLogVerbose() {
+		entry["request_full"] = map[string]interface{}{
+			"messages":    cloneMessagesForLLMLog(effectiveMessages),
+			"tools":       tools,
+			"tool_choice": toolChoice,
+		}
+		if len(rawBody) > 0 {
 			entry["raw_body"] = string(rawBody)
 		}
 	}

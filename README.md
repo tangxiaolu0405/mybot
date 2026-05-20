@@ -7,7 +7,7 @@ MyBot is an advanced chatbot designed to assist users with various tasks by util
 
 - **核心**：认知与记忆以 `brain/core.md` 为核心，资源路径、技能、记忆规则、进化机制见其中。
 - **自主演进**：分析状态→LLM 决策→任务执行→学习反馈，见 `brain/workflow.md`。在 Agent 内通过 skills（memory-reader、memory-iteration-manager、task-evolution-executor）即可完成同等能力。
-- **Cata 服务**：需常驻 daemon + CLI 时，使用本仓库内 Cata 实现（与 core/workflow 一致）。构建：`go build -o cata ./cmd/cata`、`go build -o catacli ./cmd/catacli`；运行：`./cata init`、`./cata run`，用 `./catacli` 发布任务与查看（其余由服务端 LLM 自主决策）。详见 `docs/cata-integration.md`。
+- **Cata**：单二进制。直接 `cata` 会自动后台拉起 server，退出 chat（`/exit` 或最后一个会话结束）后关闭 managed server；`cata run` 仅用于手动常驻（**catacli 已废弃**）。构建：`go build -o cata ./cmd/cata`；运行：`./cata init`、`./cata`。说明见 `agents.md` 与 `brain/core.md`。
 
 ## Features
 - Conversational AI: Engage in human-like conversations.

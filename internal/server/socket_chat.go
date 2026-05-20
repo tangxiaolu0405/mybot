@@ -1,0 +1,399 @@
+package server
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"mybot/internal/brain"
+	"mybot/internal/config"
+	"mybot/internal/evolve"
+	"mybot/internal/execcmd"
+	"mybot/internal/llm"
+)
+
+// 压缩后 socket history 目标占用（相对 context_window 的比例，为回复与 tool 留空）。
+const historyBudgetAfterCompressRatio = 0.40
+
+const execConfirmWaitTimeout = 10 * time.Minute
+
+// 终端对话：history 仅维护 user / assistant / tool。boot-leader.md 与 brain 节选由 internal/llm.Client.withBootLeaderSystemMessage 在出站前注入为前两条 system（与 user 无关）；工具仅经 API 的 tools 字段。旧版 terminalUserContent 已移除。
+
+// emitStreamLine 向 CLI 写入一行 NDJSON（无换行外的分隔；每条独立 JSON）。
+func (ss *SocketServer) emitStreamLine(conn net.Conn, ev map[string]interface{}) error {
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	_, err = conn.Write(data)
+	return err
+}
+
+// handleTerminalChatStream 流式 + 服务端工具循环；协议为多条 NDJSON，最后一条 type=done。
+func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.Message, userText string) error {
+	_ = config.InitBrainPath()
+
+	text := strings.TrimSpace(userText)
+	if text == "" {
+		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": "empty message"})
+		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
+		return fmt.Errorf("empty message")
+	}
+
+	client, err := llm.NewClientForRole(llm.RoleChat)
+	if err != nil {
+		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": fmt.Sprintf("LLM: %v", err)})
+		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
+		return err
+	}
+
+	prevLen := len(*history)
+	*history = append(*history, llm.Message{Role: "user", Content: text})
+
+	tools := ss.buildTerminalChatTools()
+	if len(tools) == 0 {
+		msg := "无可用工具：请在 " + config.GetConfigPath() + " 启用 exec.enabled 或 workspace_files.enabled，然后 /exit 重进以拉起新 server。"
+		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": msg})
+		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
+		return fmt.Errorf("no terminal tools enabled")
+	}
+	ctx := context.Background()
+
+	for round := 1; ; round++ {
+		ss.maybeContextCompress(conn, client, history, tools)
+		_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "progress", "message": fmt.Sprintf("model round %d", round)})
+
+		onDelta := func(s string) error {
+			if s == "" {
+				return nil
+			}
+			return ss.emitStreamLine(conn, map[string]interface{}{"type": "token", "content": s})
+		}
+
+		asst, toolCalls, _, err := client.ChatStreamRound(ctx, *history, tools, "auto", 0, 0, onDelta)
+		if err != nil {
+			*history = (*history)[:prevLen]
+			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": err.Error()})
+			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
+			return err
+		}
+
+		if len(toolCalls) == 0 {
+			if parsed, stripped := llm.ParseEmbeddedToolCalls(asst); len(parsed) > 0 {
+				toolCalls = parsed
+				asst = stripped
+				_ = ss.emitStreamLine(conn, map[string]interface{}{
+					"type": "progress", "message": fmt.Sprintf("executing %d tool(s) from model output", len(parsed)),
+				})
+			} else if strings.Contains(strings.ToLower(asst), "<tool") {
+				hint := "模型返回了 tool 标记但未解析成功；请重新编译 cata 并 /exit 后重进。勿在对话里输入 1/？ 确认。"
+				log.Printf("embedded tool parse failed, content prefix: %.200q", asst)
+				_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": hint})
+			}
+		}
+
+		if len(toolCalls) == 0 {
+			*history = append(*history, llm.Message{Role: "assistant", Content: asst})
+			if err := brain.AppendChatTurn(text, asst); err != nil {
+				log.Printf("short-term memory: %v", err)
+			}
+			ss.maybeContextCompress(conn, client, history, tools)
+			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": true})
+			return nil
+		}
+
+		*history = append(*history, llm.Message{Role: "assistant", Content: asst, ToolCalls: toolCalls})
+
+		for _, tc := range toolCalls {
+			name := tc.Function.Name
+			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "tool_start", "id": tc.ID, "name": name})
+			out, terr := ss.runTerminalTool(ctx, conn, tc)
+			if terr != nil {
+				out = fmt.Sprintf("error: %v", terr)
+			}
+			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "tool_result", "id": tc.ID, "name": name, "output": out})
+			*history = append(*history, llm.Message{
+				Role:       "tool",
+				ToolCallID: tc.ID,
+				Name:       name,
+				Content:    out,
+			})
+		}
+	}
+}
+
+// maybeContextCompress 当估算输入 token ≥ context_window×ratio（默认 85%）时，触发自主演进压缩并裁短 socket history。
+// history 指本连接内存中的多轮 user/assistant/tool，不是 short-term 文件；short-term 由 AppendChatTurn 写入磁盘供 evolve 提炼。
+func (ss *SocketServer) maybeContextCompress(conn net.Conn, client *llm.Client, history *[]llm.Message, tools []llm.Tool) {
+	if config.Config == nil || !config.Config.Evolution.Enabled {
+		return
+	}
+	window := client.ContextWindowTokens()
+	threshold := llm.ContextCompressThreshold(window)
+	est := client.EstimatedChatInputTokens(*history, tools)
+	if est < threshold {
+		return
+	}
+	_ = ss.emitStreamLine(conn, map[string]interface{}{
+		"type":    "progress",
+		"message": fmt.Sprintf("context ~%d/%d tokens (≥%.0f%%), consolidating memory...", est, window, llm.ContextCompressRatioValue()*100),
+	})
+	if err := evolve.RunSessionCompress(context.Background()); err != nil {
+		log.Printf("session compress: %v", err)
+		return
+	}
+	budget := int(float64(window) * historyBudgetAfterCompressRatio)
+	*history = trimHistoryToTokenBudget(client, *history, tools, budget)
+}
+
+func (ss *SocketServer) buildTerminalChatTools() []llm.Tool {
+	_ = config.InitBrainPath()
+
+	var out []llm.Tool
+	if config.Config != nil && config.Config.WorkspaceFilesEnabled() {
+		readParams := json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path under output cwd (brain.base_dir)"},"offset":{"type":"integer","description":"1-based start line (optional)"},"limit":{"type":"integer","description":"Max lines from offset (optional)"}},"required":["path"]}`)
+		replaceParams := json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]}`)
+		appendParams := json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}`)
+		out = append(out,
+			llm.Tool{Type: "function", Function: llm.ToolFunction{
+				Name:        "read_file",
+				Description: "Read a text file in the output workspace (relative path). Use before editing.",
+				Parameters:  readParams,
+			}},
+			llm.Tool{Type: "function", Function: llm.ToolFunction{
+				Name:        "search_replace",
+				Description: "Replace old_string with new_string in a file under output cwd (first match unless replace_all).",
+				Parameters:  replaceParams,
+			}},
+			llm.Tool{Type: "function", Function: llm.ToolFunction{
+				Name:        "append_file",
+				Description: "Append text to a file under output cwd (creates file if missing).",
+				Parameters:  appendParams,
+			}},
+		)
+	}
+	if config.Config != nil && config.Config.Exec.Enabled {
+		runCmdParams := json.RawMessage(`{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"},"minItems":1,"description":"argv[0]=program on PATH; no shell."}},"required":["argv"]}`)
+		out = append(out, llm.Tool{
+			Type: "function",
+			Function: llm.ToolFunction{
+				Name:        "run_command",
+				Description: brain.RunCommandToolDescription(),
+				Parameters:  runCmdParams,
+			},
+		})
+	}
+	return out
+}
+
+func (ss *SocketServer) runTerminalTool(ctx context.Context, conn net.Conn, tc llm.ToolCall) (string, error) {
+	fn := tc.Function
+	name := fn.Name
+	argsJSON := strings.TrimSpace(fn.Arguments)
+	if argsJSON == "" || argsJSON == "null" {
+		argsJSON = "{}"
+	}
+
+	switch name {
+	case "run_command":
+		var p struct {
+			Argv []string `json:"argv"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &p); err != nil {
+			return "", fmt.Errorf("run_command args: %w", err)
+		}
+		if len(p.Argv) == 0 {
+			return "", fmt.Errorf("run_command: argv required")
+		}
+		if config.Config == nil {
+			return "", fmt.Errorf("config not loaded")
+		}
+		if err := config.CheckExecArgv(p.Argv); err != nil {
+			return "", err
+		}
+		ec := &config.Config.Exec
+		wd, err := resolveExecCwd()
+		if err != nil {
+			return "", err
+		}
+		cmdLine := execcmd.FormatLine(p.Argv)
+		if config.ExecNeedsConfirm(p.Argv) {
+			id := newExecConfirmID()
+			_ = ss.emitStreamLine(conn, map[string]interface{}{
+				"type":         "exec_confirm_required",
+				"confirm_id":   id,
+				"argv":         p.Argv,
+				"command_line": cmdLine,
+				"cwd":          wd,
+				"options": []map[string]string{
+					{"id": "run", "label": "Run"},
+					{"id": "cancel", "label": "Cancel"},
+				},
+			})
+			approved, err := ss.waitExecClientConfirm(conn, id)
+			if err != nil {
+				return "", err
+			}
+			if !approved {
+				_ = ss.emitStreamLine(conn, map[string]interface{}{
+					"type": "exec_denied", "confirm_id": id,
+					"command_line": cmdLine, "cwd": wd,
+				})
+				return "execution cancelled by user", nil
+			}
+		}
+		to := time.Duration(ec.TimeoutSeconds) * time.Second
+		if to <= 0 {
+			to = 120 * time.Second
+		}
+		xctx, cancel := context.WithTimeout(ctx, to)
+		defer cancel()
+		cmd := exec.CommandContext(xctx, p.Argv[0], p.Argv[1:]...)
+		cmd.Dir = wd
+		outb, err := cmd.CombinedOutput()
+		maxB := ec.MaxOutputBytes
+		if maxB <= 0 {
+			maxB = 256 * 1024
+		}
+		trunc := false
+		if len(outb) > maxB {
+			outb = outb[:maxB]
+			trunc = true
+		}
+		text := string(outb)
+		if trunc {
+			text += "\n…(truncated)"
+		}
+		if err != nil {
+			log.Printf("run_command err: argv=%v cwd=%s: %v", p.Argv, wd, err)
+		} else {
+			log.Printf("run_command ok: argv=%v cwd=%s bytes=%d", p.Argv, wd, len(outb))
+		}
+		_ = ss.emitStreamLine(conn, map[string]interface{}{
+			"type": "exec_done", "argv": p.Argv, "command_line": cmdLine, "cwd": wd, "error": err != nil,
+		})
+		if err != nil {
+			return text, err
+		}
+		return text, nil
+
+	case "read_file":
+		return toolReadFile(argsJSON)
+	case "search_replace":
+		return toolSearchReplace(argsJSON)
+	case "append_file":
+		return toolAppendFile(argsJSON)
+
+	default:
+		return "", fmt.Errorf("unknown tool: %s", name)
+	}
+}
+
+// safePathUnder 将 rel 限制在 base 目录之下（base 须已为绝对路径或经 Abs 处理）。
+func safePathUnder(base, rel string) (string, error) {
+	if base == "" {
+		return "", fmt.Errorf("base directory not configured")
+	}
+	rel = filepath.Clean(strings.TrimSpace(rel))
+	if rel == "." {
+		return "", fmt.Errorf("path required")
+	}
+	if filepath.IsAbs(rel) {
+		return "", fmt.Errorf("absolute path not allowed")
+	}
+	full := filepath.Join(base, rel)
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return "", err
+	}
+	fullAbs, err := filepath.Abs(full)
+	if err != nil {
+		return "", err
+	}
+	r, err := filepath.Rel(baseAbs, fullAbs)
+	if err != nil || strings.HasPrefix(r, "..") {
+		return "", fmt.Errorf("path escapes allowed directory")
+	}
+	return fullAbs, nil
+}
+
+// waitExecClientConfirm 在流式 chat 同连接上阻塞，直到客户端发送 command=exec_confirm。
+func (ss *SocketServer) waitExecClientConfirm(conn net.Conn, confirmID string) (bool, error) {
+	deadline := time.Now().Add(execConfirmWaitTimeout)
+	br := bufio.NewReader(conn)
+	for {
+		if time.Now().After(deadline) {
+			return false, fmt.Errorf("exec confirmation timed out")
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		line, err := br.ReadBytes('\n')
+		if err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				continue
+			}
+			return false, fmt.Errorf("read exec_confirm: %w", err)
+		}
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var req Request
+		if err := json.Unmarshal(line, &req); err != nil {
+			return false, fmt.Errorf("invalid exec_confirm JSON: %w", err)
+		}
+		if req.Command != "exec_confirm" {
+			return false, fmt.Errorf("expected exec_confirm while command pending, got %q", req.Command)
+		}
+		if strings.TrimSpace(req.ConfirmID) != confirmID {
+			return false, fmt.Errorf("confirm_id mismatch")
+		}
+		_ = conn.SetReadDeadline(time.Time{})
+		return req.Approved, nil
+	}
+}
+
+func newExecConfirmID() string {
+	var b [10]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("t%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
+
+func resolveExecCwd() (string, error) {
+	if config.Config == nil {
+		return "", fmt.Errorf("config not loaded")
+	}
+	base := config.GetBrainBaseDir()
+	sub := strings.TrimSpace(config.Config.Exec.WorkingDir)
+	if sub == "" {
+		return base, nil
+	}
+	d, err := safePathUnder(base, filepath.Clean(sub))
+	if err != nil {
+		return "", err
+	}
+	st, err := os.Stat(d)
+	if err != nil {
+		return "", fmt.Errorf("exec.working_dir: %w", err)
+	}
+	if !st.IsDir() {
+		return "", fmt.Errorf("exec.working_dir must be an existing directory under brain.base_dir: %s", sub)
+	}
+	return d, nil
+}
+

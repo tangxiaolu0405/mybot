@@ -5,204 +5,219 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
-	// DefaultBrainDirName 默认 brain 目录名称
-	DefaultBrainDirName = "brain"
-	// DefaultConfigFileName 默认配置文件名称
-	DefaultConfigFileName = ".cata/config.json"
-	// EnvBrainDir 环境变量名，用于指定 brain 目录的绝对路径
-	EnvBrainDir = "CATA_BRAIN_DIR"
-	// EnvConfigFile 环境变量名，用于指定配置文件路径
-	EnvConfigFile = "CATA_CONFIG_FILE"
+	DefaultBrainDirName    = "brain"
+	DefaultAppConfigName   = "config.json"
+	EnvCataHome            = "CATA_HOME"
+	EnvBrainDir            = "CATA_BRAIN_DIR"
+	EnvConfigFile          = "CATA_CONFIG_FILE"
+	EnvExecEnabled         = "CATA_EXEC_ENABLED"
 )
 
 var (
-	// BrainDir brain 目录的绝对路径
-	BrainDir string
-	// BrainBaseDir brain 目录的基目录（用于 git 操作）
+	BrainDir     string
 	BrainBaseDir string
-	// Config 全局配置对象
-	Config *AppConfig
+	Config       *AppConfig
 )
 
-// AppConfig 应用配置
+// AppConfig 应用配置（主文件：CATA_HOME/config.json）。
 type AppConfig struct {
-	// Brain 配置
-	Brain BrainConfig `json:"brain"`
-
-	// LLM API 配置
-	LLM LLMConfig `json:"llm"`
-
-	// Server 配置
-	Server ServerConfig `json:"server"`
-
-	// Evolution 配置
-	Evolution EvolutionConfig `json:"evolution"`
+	Brain          BrainConfig          `json:"brain"`
+	LLM            LLMConfig            `json:"llm"`
+	Server         ServerConfig         `json:"server"`
+	Evolution      EvolutionConfig      `json:"evolution"`
+	Exec           ExecToolConfig       `json:"exec"`
+	WorkspaceFiles WorkspaceFilesConfig `json:"workspace_files"`
 }
 
-// BrainConfig Brain 目录配置
+// BrainConfig：Dir=脑子树（默认 CATA_HOME/brain）；BaseDir=产出区/工作区根（项目根）。
 type BrainConfig struct {
-	// Dir brain 目录的绝对路径（优先级最高）
-	Dir string `json:"dir"`
-	// BaseDir brain 基目录（用于 git 操作，默认与 Dir 相同）
+	Dir     string `json:"dir"`
 	BaseDir string `json:"base_dir"`
 }
 
-// LLMConfig LLM API 配置
+// LLMConfig LLM API 配置。
 type LLMConfig struct {
-	// Provider LLM 提供商（openai, anthropic 等）
-	Provider string `json:"provider"`
-	// APIKey API 密钥
-	APIKey string `json:"api_key"`
-	// APIURL API 地址
-	APIURL string `json:"api_url"`
-	// Model 模型名称
-	Model string `json:"model"`
-	// Models 按角色配置的模型名称映射（如 default/compress/index/summarize/evolution）
-	Models map[string]string `json:"models"`
-	// MaxTokens 最大 token 数
-	MaxTokens int `json:"max_tokens"`
-	// Timeout 超时时间（秒）
-	Timeout int `json:"timeout"`
-	// Enabled 是否启用 LLM 功能
-	Enabled bool `json:"enabled"`
+	Provider      string            `json:"provider"`
+	APIKey        string            `json:"api_key"`
+	APIURL        string            `json:"api_url"`
+	Model         string            `json:"model"`
+	Models        map[string]string `json:"models"`
+	MaxTokens     int               `json:"max_tokens"`
+	Timeout       int               `json:"timeout"`
+	ContextWindow int               `json:"context_window"`
+	Enabled       bool              `json:"enabled"`
 }
 
-// ServerConfig 服务器配置
+// ServerConfig 服务器配置。
 type ServerConfig struct {
-	// SocketPath Socket 文件路径（相对于 BrainBaseDir）
 	SocketPath string `json:"socket_path"`
-	// LogLevel 日志级别（debug, info, warn, error）
-	LogLevel string `json:"log_level"`
+	LogLevel   string `json:"log_level"`
 }
 
-// EvolutionConfig 自主演进配置
+// EvolutionConfig 后台自主演进与会话压缩触发。
 type EvolutionConfig struct {
-	// Enabled 是否启用自主演进
-	Enabled bool `json:"enabled"`
-	// CycleInterval 循环间隔（秒）
-	CycleInterval int `json:"cycle_interval"`
-	// TaskQueueInterval 任务队列检查间隔（秒）
-	TaskQueueInterval int `json:"task_queue_interval"`
+	Enabled                bool    `json:"enabled"`
+	CycleInterval          int     `json:"cycle_interval"`
+	ContextCompressRatio   float64 `json:"context_compress_ratio"`
+	SessionCompressTurns   int     `json:"session_compress_turns"`
 }
 
-// LoadConfig 加载配置文件
+// ExecToolConfig 终端 chat 的 run_command（os/exec，不经 shell）。
+type ExecToolConfig struct {
+	Enabled        bool     `json:"enabled"`
+	RequireConfirm bool     `json:"require_confirm"`
+	Whitelist      []string `json:"whitelist"`
+	Blacklist      []string `json:"blacklist"`
+	MaxOutputBytes int      `json:"max_output_bytes"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+	WorkingDir     string   `json:"working_dir"`
+}
+
+// WorkspaceFilesConfig 产出区内 read/search_replace/append（不经 shell）。
+type WorkspaceFilesConfig struct {
+	Enabled       *bool `json:"enabled,omitempty"`
+	MaxReadBytes  int   `json:"max_read_bytes,omitempty"`
+	MaxWriteBytes int   `json:"max_write_bytes,omitempty"`
+}
+
+// WorkspaceFilesEnabled 文件工具是否启用（缺省 true）。
+func (c *AppConfig) WorkspaceFilesEnabled() bool {
+	if c == nil {
+		return true
+	}
+	if c.WorkspaceFiles.Enabled == nil {
+		return true
+	}
+	return *c.WorkspaceFiles.Enabled
+}
+
+// LoadConfig 加载配置文件。
 func LoadConfig() (*AppConfig, error) {
 	configPath := getConfigPath()
-
-	// 如果配置文件存在，加载它
 	if _, err := os.Stat(configPath); err == nil {
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
-
 		var cfg AppConfig
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			return nil, fmt.Errorf("failed to parse config file: %w", err)
 		}
-
-		// 应用环境变量覆盖
 		applyEnvOverrides(&cfg)
-
-		// 验证和设置默认值
 		if err := validateAndSetDefaults(&cfg); err != nil {
 			return nil, err
 		}
-
-		// 设置全局配置
 		Config = &cfg
 		return &cfg, nil
 	}
-
-	// 配置文件不存在，使用默认配置
 	cfg := getDefaultConfig()
 	applyEnvOverrides(cfg)
-	validateAndSetDefaults(cfg)
-
-	// 设置全局配置
+	if err := validateAndSetDefaults(cfg); err != nil {
+		return nil, err
+	}
 	Config = cfg
 	return cfg, nil
 }
 
-// SaveConfig 保存配置文件
+// SaveConfig 保存配置文件。
 func SaveConfig(config *AppConfig) error {
 	configPath := getConfigPath()
-
-	// 确保配置目录存在
-	configDir := filepath.Dir(configPath)
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
-
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
-
 	return os.WriteFile(configPath, data, 0644)
 }
 
-// getConfigPath 获取配置文件路径
+// CataHome 状态根：$CATA_HOME 或 ~/.cata。
+func CataHome() string {
+	if p := strings.TrimSpace(os.Getenv(EnvCataHome)); p != "" {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs
+		}
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		wd, _ := os.Getwd()
+		return filepath.Join(wd, ".cata")
+	}
+	return filepath.Join(home, ".cata")
+}
+
 func getConfigPath() string {
-	// 优先使用环境变量
 	if envPath := os.Getenv(EnvConfigFile); envPath != "" {
 		return envPath
 	}
-
-	// 使用项目根目录或当前工作目录
-	baseDir := findProjectRoot()
-	if baseDir == "" {
-		wd, _ := os.Getwd()
-		baseDir = wd
-	}
-
-	return filepath.Join(baseDir, DefaultConfigFileName)
+	return filepath.Join(CataHome(), DefaultAppConfigName)
 }
 
-// GetConfigPath 获取配置文件路径（导出函数）
+// GetConfigPath 返回主配置文件路径。
 func GetConfigPath() string {
 	return getConfigPath()
 }
 
-// getDefaultConfig 获取默认配置
 func getDefaultConfig() *AppConfig {
+	wfOn := true
 	return &AppConfig{
-		Brain: BrainConfig{
-			Dir:     "", // 将在 validateAndSetDefaults 中设置
-			BaseDir: "", // 将在 validateAndSetDefaults 中设置
-		},
+		Brain: BrainConfig{},
 		LLM: LLMConfig{
-			Provider:  getDefaultProvider(),
-			APIKey:     getDefaultAPIKey(),
-			APIURL:     getDefaultAPIURL(),
-			Model:      getDefaultModel(),
-			MaxTokens:  2000,
-			Timeout:    60,
-			Enabled:    getDefaultAPIKey() != "",
+			Provider: getDefaultProvider(),
+			APIKey:   getDefaultAPIKey(),
+			APIURL:   getDefaultAPIURL(),
+			Model:    getDefaultModel(),
+			MaxTokens: 2000,
+			Timeout:   60,
+			Enabled:   getDefaultAPIKey() != "",
 		},
 		Server: ServerConfig{
-			SocketPath: ".cata/cata.sock",
+			SocketPath: "",
 			LogLevel:   "info",
 		},
 		Evolution: EvolutionConfig{
-			Enabled:            true,
-			CycleInterval:      3600, // 1 小时
-			TaskQueueInterval: 30,   // 30 秒
+			Enabled:              true,
+			CycleInterval:        3600,
+			ContextCompressRatio: 0.85,
+			SessionCompressTurns: 12,
+		},
+		Exec: ExecToolConfig{
+			Enabled:        true,
+			RequireConfirm: false,
+			Whitelist:      []string{"*"},
+			Blacklist: []string{
+				"rm -rf /",
+				"mkfs",
+				"dd if=/dev/",
+				">/dev/sd",
+				"| sh",
+				"|bash",
+				"powershell -e",
+			},
+			MaxOutputBytes: 256 * 1024,
+			TimeoutSeconds: 120,
+		},
+		WorkspaceFiles: WorkspaceFilesConfig{
+			Enabled:       &wfOn,
+			MaxReadBytes:  512 * 1024,
+			MaxWriteBytes: 512 * 1024,
 		},
 	}
 }
 
-// applyEnvOverrides 应用环境变量覆盖
 func applyEnvOverrides(config *AppConfig) {
-	// Brain 目录
 	if envDir := os.Getenv(EnvBrainDir); envDir != "" {
 		config.Brain.Dir = envDir
 	}
-
-	// LLM API Key（支持多种提供商的环境变量）
+	if v := strings.TrimSpace(os.Getenv(EnvExecEnabled)); v == "1" || strings.EqualFold(v, "true") {
+		config.Exec.Enabled = true
+	}
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		config.LLM.APIKey = apiKey
 		if config.LLM.Provider == "" {
@@ -210,7 +225,6 @@ func applyEnvOverrides(config *AppConfig) {
 		}
 		config.LLM.Enabled = true
 	}
-	// API Key 优先使用配置文件中的值，仅在配置为空时使用环境变量
 	if apiKey := os.Getenv("DASHSCOPE_API_KEY"); apiKey != "" && config.LLM.APIKey == "" {
 		config.LLM.APIKey = apiKey
 		if config.LLM.Provider == "" {
@@ -225,8 +239,6 @@ func applyEnvOverrides(config *AppConfig) {
 		}
 		config.LLM.Enabled = true
 	}
-	// 通用 LLM 配置环境变量（仅在配置文件中的值为空时使用）
-	// 优先使用配置文件中的值
 	if config.LLM.APIURL == "" {
 		if apiURL := os.Getenv("LLM_API_URL"); apiURL != "" {
 			config.LLM.APIURL = apiURL
@@ -234,7 +246,6 @@ func applyEnvOverrides(config *AppConfig) {
 			config.LLM.APIURL = apiURL
 		}
 	}
-	// Model 和 Provider 也优先使用配置文件中的值
 	if config.LLM.Model == "" {
 		if model := os.Getenv("LLM_MODEL"); model != "" {
 			config.LLM.Model = model
@@ -249,57 +260,48 @@ func applyEnvOverrides(config *AppConfig) {
 	}
 }
 
-// validateAndSetDefaults 验证配置并设置默认值
 func validateAndSetDefaults(config *AppConfig) error {
-	// 设置 Brain 目录
-	if config.Brain.Dir == "" {
-		// 使用环境变量或查找项目根目录
+	_ = os.MkdirAll(CataHome(), 0755)
+
+	if strings.TrimSpace(config.Brain.Dir) == "" {
 		if envDir := os.Getenv(EnvBrainDir); envDir != "" {
 			absPath, err := filepath.Abs(envDir)
 			if err != nil {
 				return fmt.Errorf("invalid CATA_BRAIN_DIR path: %w", err)
 			}
 			config.Brain.Dir = absPath
-			config.Brain.BaseDir = absPath
 		} else {
-			projectRoot := findProjectRoot()
-			if projectRoot != "" {
-				config.Brain.Dir = filepath.Join(projectRoot, DefaultBrainDirName)
-				config.Brain.BaseDir = projectRoot
-			} else {
-				wd, err := os.Getwd()
-				if err != nil {
-					return fmt.Errorf("failed to get working directory: %w", err)
-				}
-				config.Brain.Dir = filepath.Join(wd, DefaultBrainDirName)
-				config.Brain.BaseDir = wd
-			}
+			config.Brain.Dir = filepath.Join(CataHome(), DefaultBrainDirName)
 		}
 	} else {
-		// 确保是绝对路径
 		absPath, err := filepath.Abs(config.Brain.Dir)
 		if err != nil {
 			return fmt.Errorf("invalid brain dir path: %w", err)
 		}
 		config.Brain.Dir = absPath
-
-		// 设置 BaseDir
-		if config.Brain.BaseDir == "" {
-			config.Brain.BaseDir = absPath
-		} else {
-			absBaseDir, err := filepath.Abs(config.Brain.BaseDir)
-			if err != nil {
-				return fmt.Errorf("invalid brain base dir path: %w", err)
-			}
-			config.Brain.BaseDir = absBaseDir
-		}
 	}
 
-	// 设置全局变量
+	if strings.TrimSpace(config.Brain.BaseDir) == "" {
+		if root := FindProjectRoot(); root != "" {
+			config.Brain.BaseDir = root
+		} else {
+			wd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("failed to get working directory: %w", err)
+			}
+			config.Brain.BaseDir = wd
+		}
+	} else {
+		absBaseDir, err := filepath.Abs(config.Brain.BaseDir)
+		if err != nil {
+			return fmt.Errorf("invalid brain base dir path: %w", err)
+		}
+		config.Brain.BaseDir = absBaseDir
+	}
+
 	BrainDir = config.Brain.Dir
 	BrainBaseDir = config.Brain.BaseDir
 
-	// 如果 LLM 配置为空，从环境变量自动填充
 	if config.LLM.Provider == "" {
 		config.LLM.Provider = getDefaultProvider()
 	}
@@ -312,15 +314,154 @@ func validateAndSetDefaults(config *AppConfig) error {
 	if config.LLM.Model == "" {
 		config.LLM.Model = getDefaultModelForProvider(config.LLM.Provider)
 	}
-	// 如果环境变量有 API key，自动启用 LLM（即使配置文件中 enabled 为 false）
 	if config.LLM.APIKey != "" {
 		config.LLM.Enabled = true
+	}
+
+	normalizeExecConfig(&config.Exec)
+	normalizeWorkspaceFiles(&config.WorkspaceFiles)
+
+	if config.LLM.Enabled && !config.Exec.Enabled {
+		if v := strings.TrimSpace(os.Getenv(EnvExecEnabled)); v == "0" || strings.EqualFold(v, "false") {
+			// 显式关闭
+		} else {
+			config.Exec.Enabled = true
+		}
+	}
+
+	if config.Evolution.CycleInterval <= 0 {
+		config.Evolution.CycleInterval = 3600
+	}
+	if config.Evolution.ContextCompressRatio <= 0 || config.Evolution.ContextCompressRatio > 1 {
+		config.Evolution.ContextCompressRatio = 0.85
+	}
+	if config.Evolution.SessionCompressTurns <= 0 {
+		config.Evolution.SessionCompressTurns = 12
 	}
 
 	return nil
 }
 
-// InitBrainPath 初始化 brain 目录路径（向后兼容）
+func normalizeWorkspaceFiles(w *WorkspaceFilesConfig) {
+	if w == nil {
+		return
+	}
+	if w.MaxReadBytes <= 0 {
+		w.MaxReadBytes = 512 * 1024
+	}
+	if w.MaxWriteBytes <= 0 {
+		w.MaxWriteBytes = 512 * 1024
+	}
+}
+
+func normalizeExecConfig(e *ExecToolConfig) {
+	if e == nil {
+		return
+	}
+	if e.MaxOutputBytes <= 0 {
+		e.MaxOutputBytes = 256 * 1024
+	}
+	if e.TimeoutSeconds <= 0 {
+		e.TimeoutSeconds = 120
+	}
+}
+
+func execArgv0Base(argv0 string) string {
+	s := strings.TrimSpace(argv0)
+	s = filepath.Base(s)
+	s = strings.ToLower(s)
+	if strings.HasSuffix(s, ".exe") {
+		s = strings.TrimSuffix(s, ".exe")
+	}
+	return s
+}
+
+var defaultExecWhitelist = []string{
+	"git", "go", "npm", "node", "npx", "pnpm", "yarn", "python", "python3", "pip", "pip3",
+	"cargo", "rustc", "make", "cmake", "docker", "kubectl", "bash", "sh", "zsh",
+	"ls", "cat", "head", "tail", "grep", "rg", "find", "sed", "awk", "chmod", "mkdir",
+	"cp", "mv", "touch", "echo", "pwd", "which", "where", "type", "dir", "cmd", "powershell",
+	"wsl", "code", "cursor",
+}
+
+func execAllowAllWhitelist(w []string) bool {
+	for _, x := range w {
+		if strings.TrimSpace(x) == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesExecWhitelistItem(base, item string) bool {
+	item = strings.ToLower(strings.TrimSpace(item))
+	if item == "" || item == "*" {
+		return false
+	}
+	if base == item {
+		return true
+	}
+	if strings.Contains(item, "*") || strings.Contains(item, "?") {
+		ok, _ := filepath.Match(item, base)
+		return ok
+	}
+	if strings.HasPrefix(base, item+"-") || strings.HasPrefix(base, item+".") {
+		return true
+	}
+	return false
+}
+
+// CheckExecArgv 黑白名单校验（整条命令行小写子串匹配 blacklist）。
+func CheckExecArgv(argv []string) error {
+	if Config == nil {
+		return fmt.Errorf("config not loaded")
+	}
+	if len(argv) == 0 {
+		return fmt.Errorf("argv required")
+	}
+	line := strings.ToLower(strings.Join(argv, " "))
+	for _, b := range Config.Exec.Blacklist {
+		b = strings.ToLower(strings.TrimSpace(b))
+		if b != "" && strings.Contains(line, b) {
+			return fmt.Errorf("command blocked by blacklist")
+		}
+	}
+	wl := Config.Exec.Whitelist
+	if execAllowAllWhitelist(wl) {
+		return nil
+	}
+	if len(wl) == 0 {
+		wl = defaultExecWhitelist
+	}
+	base := execArgv0Base(argv[0])
+	for _, item := range wl {
+		if matchesExecWhitelistItem(base, item) {
+			return nil
+		}
+	}
+	return fmt.Errorf("argv[0] %q not in exec whitelist", argv[0])
+}
+
+// ExecNeedsConfirm require_confirm=true 时每条都确认；否则仅 blacklist 命中时确认。
+func ExecNeedsConfirm(argv []string) bool {
+	if Config == nil {
+		return true
+	}
+	ec := &Config.Exec
+	if ec.RequireConfirm {
+		return true
+	}
+	line := strings.ToLower(strings.Join(argv, " "))
+	for _, b := range ec.Blacklist {
+		b = strings.ToLower(strings.TrimSpace(b))
+		if b != "" && strings.Contains(line, b) {
+			return true
+		}
+	}
+	return false
+}
+
+// InitBrainPath 加载配置并解析 brain 与基目录路径。
 func InitBrainPath() error {
 	if Config == nil {
 		var err error
@@ -332,66 +473,78 @@ func InitBrainPath() error {
 	return nil
 }
 
-// GetBrainDir 获取 brain 目录路径
+// GetBrainDir 脑子目录（CATA_HOME/brain 或覆盖）。
 func GetBrainDir() string {
 	if Config == nil {
 		InitBrainPath()
 	}
 	if BrainDir == "" {
-		wd, _ := os.Getwd()
-		BrainDir = filepath.Join(wd, DefaultBrainDirName)
+		BrainDir = filepath.Join(CataHome(), DefaultBrainDirName)
 	}
 	return BrainDir
 }
 
-// GetBrainBaseDir 获取 brain 基目录路径（用于 git 操作）
+// GetBrainBaseDir 产出区/工作区根（brain.base_dir）。
 func GetBrainBaseDir() string {
 	if Config == nil {
 		InitBrainPath()
 	}
 	if BrainBaseDir == "" {
-		BrainBaseDir = GetBrainDir()
+		if r := FindProjectRoot(); r != "" {
+			BrainBaseDir = r
+		} else {
+			wd, _ := os.Getwd()
+			BrainBaseDir = wd
+		}
 	}
 	return BrainBaseDir
 }
 
-// GetBrainPath 获取 brain 目录下的文件路径
+// GetBrainPath 脑子目录下的相对路径。
 func GetBrainPath(relPath string) string {
 	return filepath.Join(GetBrainDir(), relPath)
 }
 
-// findProjectRoot 查找项目根目录（包含 go.mod 或 .git 的目录）
-func findProjectRoot() string {
+// ResolvedSocketPath Unix socket 绝对路径。
+func ResolvedSocketPath() string {
+	if err := InitBrainPath(); err != nil {
+		return filepath.Join(CataHome(), "cata.sock")
+	}
+	if Config != nil {
+		p := strings.TrimSpace(Config.Server.SocketPath)
+		if p != "" {
+			if filepath.IsAbs(p) {
+				return p
+			}
+			return filepath.Join(GetBrainBaseDir(), p)
+		}
+	}
+	return filepath.Join(CataHome(), "cata.sock")
+}
+
+// FindProjectRoot 自 cwd 向上查找含 go.mod 或 .git 的目录。
+func FindProjectRoot() string {
 	wd, err := os.Getwd()
 	if err != nil {
 		return ""
 	}
-
 	dir := wd
 	for {
-		// 检查是否存在 go.mod 或 .git
-		goModPath := filepath.Join(dir, "go.mod")
-		gitPath := filepath.Join(dir, ".git")
-
-		if _, err := os.Stat(goModPath); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			return dir
 		}
-		if _, err := os.Stat(gitPath); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			return dir
 		}
-
-		// 向上查找
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			break // 已到达根目录
+			break
 		}
 		dir = parent
 	}
-
 	return ""
 }
 
-// getDefaultProvider 获取默认提供商（根据环境变量）
 func getDefaultProvider() string {
 	if provider := os.Getenv("LLM_PROVIDER"); provider != "" {
 		return provider
@@ -405,7 +558,6 @@ func getDefaultProvider() string {
 	return "openai"
 }
 
-// getDefaultAPIKey 获取默认 API Key（根据环境变量）
 func getDefaultAPIKey() string {
 	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
 		return key
@@ -419,7 +571,6 @@ func getDefaultAPIKey() string {
 	return ""
 }
 
-// getDefaultAPIURL 获取默认 API URL（根据提供商）
 func getDefaultAPIURL() string {
 	if url := os.Getenv("LLM_API_URL"); url != "" {
 		return url
@@ -427,27 +578,15 @@ func getDefaultAPIURL() string {
 	if url := os.Getenv("OPENAI_API_URL"); url != "" {
 		return url
 	}
-	// 根据提供商返回默认 URL
-	provider := getDefaultProvider()
-	switch provider {
-	case "qwen", "tongyi", "dashscope":
-		// 使用 OpenAI 兼容模式（推荐）
-		return "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-	case "claude", "anthropic":
-		return "https://api.anthropic.com/v1/messages"
-	default:
-		return "https://api.openai.com/v1/chat/completions"
-	}
+	return getDefaultAPIURLForProvider(getDefaultProvider())
 }
 
-// getDefaultAPIURLForProvider 根据指定的 provider 获取默认 URL
 func getDefaultAPIURLForProvider(provider string) string {
 	if url := os.Getenv("LLM_API_URL"); url != "" {
 		return url
 	}
 	switch provider {
 	case "qwen", "tongyi", "dashscope":
-		// 使用 OpenAI 兼容模式（推荐）
 		return "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 	case "claude", "anthropic":
 		return "https://api.anthropic.com/v1/messages"
@@ -459,7 +598,6 @@ func getDefaultAPIURLForProvider(provider string) string {
 	}
 }
 
-// getDefaultModel 获取默认模型（根据提供商）
 func getDefaultModel() string {
 	if model := os.Getenv("LLM_MODEL"); model != "" {
 		return model
@@ -467,19 +605,9 @@ func getDefaultModel() string {
 	if model := os.Getenv("OPENAI_MODEL"); model != "" {
 		return model
 	}
-	// 根据提供商返回默认模型
-	provider := getDefaultProvider()
-	switch provider {
-	case "qwen", "tongyi", "dashscope":
-		return "qwen-turbo"
-	case "claude", "anthropic":
-		return "claude-3-sonnet-20240229"
-	default:
-		return "gpt-3.5-turbo"
-	}
+	return getDefaultModelForProvider(getDefaultProvider())
 }
 
-// getDefaultModelForProvider 根据指定的 provider 获取默认模型
 func getDefaultModelForProvider(provider string) string {
 	if model := os.Getenv("LLM_MODEL"); model != "" {
 		return model

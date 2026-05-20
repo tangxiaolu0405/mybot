@@ -43,7 +43,8 @@ type ToolCallFunction struct {
 type Provider interface {
 	// BuildRequest 构建 HTTP 请求
 	// tools: 允许为空；toolChoice: 目前简单使用字符串（如 "auto"、"none"），留空则走默认策略
-	BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string) (*http.Request, error)
+	// stream: true 时请求 OpenAI 兼容 SSE（data: 行）
+	BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) (*http.Request, error)
 	// ParseResponse 解析 HTTP 响应，返回 assistant 内容和（可选的）tool_calls
 	ParseResponse(body []byte) (string, []ToolCall, error)
 	// GetAPIKeyHeader 获取 API Key 的 Header 名称和格式
@@ -53,24 +54,62 @@ type Provider interface {
 // OpenAIProvider OpenAI 提供商
 type OpenAIProvider struct{}
 
-func (p *OpenAIProvider) BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string) (*http.Request, error) {
-	req := ChatRequest{
+// wireChatRequest 与 OpenAI Chat Completions 对齐的 JSON 负载；messages 单独构造以满足各兼容网关对 content 的校验。
+type wireChatRequest struct {
+	Model         string                   `json:"model"`
+	Messages      []map[string]interface{} `json:"messages"`
+	MaxTokens     int                      `json:"max_tokens,omitempty"`
+	Temperature   float64                  `json:"temperature,omitempty"`
+	Tools         []Tool                   `json:"tools,omitempty"`
+	ToolChoice    interface{}              `json:"tool_choice,omitempty"`
+	Stream        bool                     `json:"stream,omitempty"`
+}
+
+// messagesForChatCompletionsWire 将 Message 转为 JSON 对象切片。
+// 对「仅 tool_calls、无 assistant 正文」的消息显式写入 content:null，避免部分兼容实现（如 DashScope）在省略 content 时误判类型并报 400。
+func messagesForChatCompletionsWire(messages []Message) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(messages))
+	for _, m := range messages {
+		mm := map[string]interface{}{"role": m.Role}
+		onlyToolCalls := m.Role == "assistant" && len(m.ToolCalls) > 0 && strings.TrimSpace(m.Content) == ""
+		if onlyToolCalls {
+			mm["content"] = nil
+		} else {
+			mm["content"] = m.Content
+		}
+		if len(m.ToolCalls) > 0 {
+			mm["tool_calls"] = m.ToolCalls
+		}
+		if m.ToolCallID != "" {
+			mm["tool_call_id"] = m.ToolCallID
+		}
+		if m.Name != "" {
+			mm["name"] = m.Name
+		}
+		out = append(out, mm)
+	}
+	return out
+}
+
+func marshalChatCompletionsBody(model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) ([]byte, error) {
+	req := wireChatRequest{
 		Model:       model,
-		Messages:    messages,
+		Messages:    messagesForChatCompletionsWire(messages),
 		MaxTokens:   maxTokens,
 		Temperature: temperature,
+		Stream:      stream,
 	}
-
-	// 附带 tools（如有）
 	if len(tools) > 0 {
 		req.Tools = tools
-		// toolChoice 目前直接透传字符串，常见为 "auto" 或 "none"
 		if toolChoice != "" {
 			req.ToolChoice = toolChoice
 		}
 	}
+	return json.Marshal(req)
+}
 
-	reqBody, err := json.Marshal(req)
+func (p *OpenAIProvider) BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) (*http.Request, error) {
+	reqBody, err := marshalChatCompletionsBody(model, messages, maxTokens, temperature, tools, toolChoice, stream)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -149,24 +188,8 @@ type QwenResponse struct {
 	Message   string `json:"message,omitempty"`
 }
 
-func (p *QwenProvider) BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string) (*http.Request, error) {
-	// DashScope 使用 OpenAI 兼容格式
-	req := ChatRequest{
-		Model:       model,
-		Messages:    messages,
-		MaxTokens:   maxTokens,
-		Temperature: temperature,
-	}
-
-	// 支持 OpenAI 兼容的 tools
-	if len(tools) > 0 {
-		req.Tools = tools
-		if toolChoice != "" {
-			req.ToolChoice = toolChoice
-		}
-	}
-
-	reqBody, err := json.Marshal(req)
+func (p *QwenProvider) BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) (*http.Request, error) {
+	reqBody, err := marshalChatCompletionsBody(model, messages, maxTokens, temperature, tools, toolChoice, stream)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
