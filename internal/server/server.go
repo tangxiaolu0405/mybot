@@ -9,8 +9,10 @@ import (
 	"syscall"
 	"time"
 
+	"mybot/internal/brain"
 	"mybot/internal/config"
 	"mybot/internal/evolve"
+	"mybot/internal/mcp"
 )
 
 // Server 终端 Agent 常驻进程：Unix socket + 流式 LLM 对话 + 可选后台自主演进。
@@ -52,6 +54,13 @@ func (s *Server) Start() error {
 	socketSrv.Start()
 	log.Println("✓ Socket server started")
 
+	if config.Config != nil && config.Config.MCP.Enabled {
+		caps := brain.LoadActiveCapabilities()
+		mcp.Init(config.Config.MCP, caps)
+	} else {
+		log.Println("- MCP disabled")
+	}
+
 	if config.Config != nil && config.Config.Evolution.Enabled {
 		interval := time.Duration(config.Config.Evolution.CycleInterval) * time.Second
 		if interval <= 0 {
@@ -88,6 +97,7 @@ func (s *Server) setupSignalHandling() {
 
 // Stop 优雅停止。
 func (s *Server) Stop() {
+	mcp.Shutdown()
 	s.cancel()
 	if s.socketSrv != nil {
 		s.socketSrv.Stop()

@@ -60,9 +60,15 @@
 
 ---
 
+## MCP 与 Skill（已接入）
+
+- **MCP browser**：`~/.cata/config.json` → `mcp.servers`（默认 `npx -y @playwright/mcp@latest`，name=`browser`）；`modes/*/capabilities.yaml` 用 `mcp: [browser]` 启用。
+- **Skill（提示词型）**：`capabilities.yaml` → `skills: [name]`；从 `~/.cata/skills/`、项目 `skills/`、或 `~/.cursor/skills-cursor/` 加载 `SKILL.md` 注入 system（非 API tool）。
+- **执行型 skill**（脚本）：暂未接，等同后续 `run_command` / 子进程扩展。
+
 ## 刻意排除
 
-- **`skills/`、`scripts/`**：非主线；不扩展 MD 技能包。
+- **旧 `skills/` 服务端调度、`scripts/` 主线**：已废弃；仅保留 MD 提示词加载。
 - **手动演进命令、任务队列、MemoryManager 索引**：已废弃。
 
 ---

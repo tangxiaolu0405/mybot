@@ -22,6 +22,7 @@ import (
 	"mybot/internal/evolve"
 	"mybot/internal/execcmd"
 	"mybot/internal/llm"
+	"mybot/internal/mcp"
 )
 
 // 压缩后 socket history 目标占用（相对 context_window 的比例，为回复与 tool 留空）。
@@ -185,6 +186,9 @@ func (ss *SocketServer) buildTerminalChatTools() []llm.Tool {
 			}},
 		)
 	}
+	if mgr := mcp.Global(); mgr != nil {
+		out = append(out, mgr.Tools()...)
+	}
 	if config.Config != nil && config.Config.Exec.Enabled {
 		runCmdParams := json.RawMessage(`{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"},"minItems":1,"description":"argv[0]=program on PATH; no shell."}},"required":["argv"]}`)
 		out = append(out, llm.Tool{
@@ -205,6 +209,12 @@ func (ss *SocketServer) runTerminalTool(ctx context.Context, conn net.Conn, tc l
 	argsJSON := strings.TrimSpace(fn.Arguments)
 	if argsJSON == "" || argsJSON == "null" {
 		argsJSON = "{}"
+	}
+
+	if mgr := mcp.Global(); mgr != nil {
+		if out, err, ok := mgr.TryCall(ctx, name, argsJSON); ok {
+			return out, err
+		}
 	}
 
 	switch name {

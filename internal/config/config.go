@@ -31,6 +31,24 @@ type AppConfig struct {
 	Evolution      EvolutionConfig      `json:"evolution"`
 	Exec           ExecToolConfig       `json:"exec"`
 	WorkspaceFiles WorkspaceFilesConfig `json:"workspace_files"`
+	MCP            MCPConfig            `json:"mcp"`
+}
+
+// MCPConfig MCP 工具服务（stdio）；默认 browser 使用 @playwright/mcp。
+type MCPConfig struct {
+	Enabled            bool             `json:"enabled"`
+	Servers            []MCPServerEntry `json:"servers"`
+	ToolTimeoutSeconds int              `json:"tool_timeout_seconds"`
+	MaxOutputBytes     int              `json:"max_output_bytes"`
+}
+
+// MCPServerEntry 单个 MCP server 进程配置。
+type MCPServerEntry struct {
+	Name    string            `json:"name"`
+	Enabled bool              `json:"enabled"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env"`
 }
 
 // BrainConfig：Dir=脑子树（默认 CATA_HOME/brain）；BaseDir=产出区/工作区根（项目根）。
@@ -208,6 +226,17 @@ func getDefaultConfig() *AppConfig {
 			MaxReadBytes:  512 * 1024,
 			MaxWriteBytes: 512 * 1024,
 		},
+		MCP: MCPConfig{
+			Enabled: true,
+			Servers: []MCPServerEntry{{
+				Name:    "browser",
+				Enabled: true,
+				Command: "npx",
+				Args:    []string{"-y", "@playwright/mcp@latest"},
+			}},
+			ToolTimeoutSeconds: 120,
+			MaxOutputBytes:     256 * 1024,
+		},
 	}
 }
 
@@ -320,6 +349,7 @@ func validateAndSetDefaults(config *AppConfig) error {
 
 	normalizeExecConfig(&config.Exec)
 	normalizeWorkspaceFiles(&config.WorkspaceFiles)
+	normalizeMCPConfig(&config.MCP)
 
 	if config.LLM.Enabled && !config.Exec.Enabled {
 		if v := strings.TrimSpace(os.Getenv(EnvExecEnabled)); v == "0" || strings.EqualFold(v, "false") {
@@ -340,6 +370,26 @@ func validateAndSetDefaults(config *AppConfig) error {
 	}
 
 	return nil
+}
+
+func normalizeMCPConfig(m *MCPConfig) {
+	if m == nil {
+		return
+	}
+	if m.ToolTimeoutSeconds <= 0 {
+		m.ToolTimeoutSeconds = 120
+	}
+	if m.MaxOutputBytes <= 0 {
+		m.MaxOutputBytes = 256 * 1024
+	}
+	if len(m.Servers) == 0 && m.Enabled {
+		m.Servers = []MCPServerEntry{{
+			Name:    "browser",
+			Enabled: true,
+			Command: "npx",
+			Args:    []string{"-y", "@playwright/mcp@latest"},
+		}}
+	}
 }
 
 func normalizeWorkspaceFiles(w *WorkspaceFilesConfig) {

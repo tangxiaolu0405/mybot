@@ -89,10 +89,24 @@ func TerminalBrainSystemExtension(maxPerFile, maxTotal int) string {
 	}
 	body := strings.Join(blocks, "\n\n")
 	paths := TerminalPathsSystemBlock()
-	if strings.TrimSpace(body) == "" {
-		return paths
+	skills := ""
+	if w := Active(); w != nil {
+		caps := LoadActiveCapabilities()
+		skills = SkillsPromptBlock(caps.Skills)
 	}
-	return paths + "\n\n" + TerminalBundleSystemPrefix + "（global + mode persona；均在 ~/.cata，非产出区）】\n\n" + body
+	var b strings.Builder
+	b.WriteString(paths)
+	if strings.TrimSpace(skills) != "" {
+		b.WriteString("\n\n")
+		b.WriteString(skills)
+	}
+	if strings.TrimSpace(body) != "" {
+		b.WriteString("\n\n")
+		b.WriteString(TerminalBundleSystemPrefix)
+		b.WriteString("（global + mode persona；均在 ~/.cata，非产出区）】\n\n")
+		b.WriteString(body)
+	}
+	return b.String()
 }
 
 func readSection(title, path string, maxPerFile int) string {
