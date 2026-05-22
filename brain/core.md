@@ -51,7 +51,7 @@
                 ├── short/current.md    # server 每轮对话追加
                 ├── long/*.md
                 ├── archive/
-                └── index.json          # 按需加载（二期 router）
+                └── index.json          # 演进维护；对话注入摘要，按需 read_file 展开
 ```
 
 **项目目录（可选，不在 home 内）**
@@ -80,6 +80,9 @@
 | persona.local | `persona.local.md` | evolve / 人 | 每轮注入 |
 | long / archive | `memory/long`、`memory/archive` | evolve | 按需（index） |
 | global | `~/.cata/global/` | 人 / 种子 | 约束+行为节选 |
+| **skills** | `skills/<id>/`（脑子内） | **仅 evolve** `crystallize_skill` | `capabilities.yaml` + `run_skill` / SKILL 注入 |
+
+**Skill**：脚本与 `manifest.yaml` 只在脑子；**产出**写在 cwd。查找：workspace `skills/` → `~/.cata/skills/`。`mcp: [browser]` 保留给未固化站点。
 
 对话注入：`boot-assembler` → global 约束/行为 → mode persona → persona.local（见 `internal/brain/terminal_context.go`）。
 
@@ -88,7 +91,8 @@
 - 周期：`evolution.cycle_interval`（默认 600s）  
 - **每个 workspace 单独** Observe / 门控 / LLM / 补丁 / **`evolution_log.json`**  
 - **会话压缩**：估算本连接 **socket history**（含将注入的 boot/global/persona）达到 `llm.context_window × evolution.context_compress_ratio`（默认 **85%**）时，触发 consolidate（short-term → persona），并把 history 裁到约 **40%** 窗口留空给回复  
-- 路径白名单：`persona.local.md`、`modes/*/persona|behavior|constraints`、`memory/**`  
+- 路径白名单：`persona.local.md`、`modes/*/persona|behavior|constraints`、`memory/**`、`skills/**`（SKILL.md、manifest、脚本）  
+- **`crystallize_skill`**：高 token 压缩后 / 重复 browser 等 → 写脑子 `skills/<id>/`，**代码** append `capabilities.yaml` 的 `skills:`（禁止模型改 `mcp:`）  
 - 周期演进门控：short-term 活动等（见 `internal/evolve`）
 
 ## 终端对话上下文

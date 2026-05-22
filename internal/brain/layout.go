@@ -34,6 +34,10 @@ const (
 	FileConstraints = "constraints.md"
 	FileCapabilities = "capabilities.yaml"
 
+	DirSkills         = "skills"
+	FileSkillManifest = "manifest.yaml"
+	FileSkillMD       = "SKILL.md"
+
 	ProjectCataDir      = ".cata"
 	FileWorkspaceYAML   = "workspace.yaml"
 	FileWorkspaceLink   = "workspace.link"

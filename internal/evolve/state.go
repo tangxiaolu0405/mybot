@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"mybot/internal/brain"
+	"mybot/internal/clock"
 )
 
 // Snapshot 自主演进 Observe 阶段的只读状态（仅元数据，不把整库塞进 LLM）。
@@ -22,6 +23,7 @@ type Snapshot struct {
 	LastEvolutionAction   string   `json:"last_evolution_action,omitempty"`
 	RecentLogSummary      string   `json:"recent_log_summary,omitempty"`
 	Triggers              []string `json:"triggers,omitempty"`
+	SkillIDs              []string `json:"skill_ids,omitempty"`
 }
 
 // Fingerprint 仅跟踪演进「输入」信号（不含 hot：hot 由演进写出，不应作为触发依据）。
@@ -32,15 +34,15 @@ func (s *Snapshot) Fingerprint() string {
 
 // Observe 读取 ~/.cata/brain 元数据（不读 workflow/core 全文）。
 func Observe() (*Snapshot, error) {
-	s := &Snapshot{ObservedAt: time.Now().UTC().Format(time.RFC3339)}
+	s := &Snapshot{ObservedAt: clock.RFC3339()}
 
 	if info, err := os.Stat(brain.HotPath()); err == nil {
-		s.HotModTime = info.ModTime().UTC().Format(time.RFC3339)
+		s.HotModTime = clock.FormatTime(info.ModTime(), time.RFC3339)
 	}
 
 	shortPath := brain.ShortTermCurrentPath()
 	if info, err := os.Stat(shortPath); err == nil {
-		s.ShortTermModTime = info.ModTime().UTC().Format(time.RFC3339)
+		s.ShortTermModTime = clock.FormatTime(info.ModTime(), time.RFC3339)
 	}
 	if data, err := os.ReadFile(shortPath); err == nil {
 		s.ShortTermBytes = int64(len(data))
@@ -66,6 +68,11 @@ func Observe() (*Snapshot, error) {
 
 	loadLastEvolutionMeta(s)
 	s.RecentLogSummary = summarizeRecentLog(2, 80)
+	if w := brain.Active(); w != nil {
+		if ids, err := brain.ListWorkspaceSkillIDs(w); err == nil {
+			s.SkillIDs = ids
+		}
+	}
 	computeTriggers(s)
 	return s, nil
 }

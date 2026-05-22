@@ -1,0 +1,63 @@
+{
+  "brain": {
+    "dir": "",
+    "base_dir": ""
+  },
+  "llm": {
+    "provider": "deepseek",
+    "api_key": "",
+    "api_url": "https://api.deepseek.com/chat/completions",
+    "model": "deepseek-v4-flash",
+    "models": null,
+    "max_tokens": 8192,
+    "timeout": 600,
+    "context_window": 128000,
+    "thinking": "auto",
+    "enabled": true
+  },
+  "llm_previous_qwen": {
+    "_comment": "原千问/DashScope 配置备份（JSON 无注释，用此对象保留）。恢复时复制字段到 llm。",
+    "provider": "qwen",
+    "api_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "model": "qwen-turbo"
+  },
+  "server": {
+    "socket_path": "",
+    "log_level": "info",
+    "timezone": "Asia/Shanghai"
+  },
+  "evolution": {
+    "enabled": true,
+    "cycle_interval": 300,
+    "context_compress_ratio": 0.85,
+    "session_compress_turns": 12
+  },
+  "exec": {
+    "enabled": true,
+    "require_confirm": false,
+    "whitelist": ["*"],
+    "blacklist": ["rm -rf /", "mkfs", "dd if=/dev/", ">/dev/sd", "| sh", "|bash", "powershell -e"],
+    "max_output_bytes": 262144,
+    "timeout_seconds": 120,
+    "working_dir": ""
+  },
+  "workspace_files": {
+    "enabled": true,
+    "max_read_bytes": 524288,
+    "max_write_bytes": 524288
+  },
+  "mcp": {
+    "enabled": true,
+    "servers": [
+      {
+        "name": "browser",
+        "enabled": true,
+        "command": "npx",
+        "args": ["-y", "@playwright/mcp@latest"],
+        "env": null
+      }
+    ],
+    "tool_timeout_seconds": 120,
+    "max_output_bytes": 262144
+  }
+}

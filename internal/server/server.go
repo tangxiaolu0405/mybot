@@ -6,10 +6,10 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
-	"mybot/internal/brain"
 	"mybot/internal/config"
 	"mybot/internal/evolve"
 	"mybot/internal/mcp"
@@ -35,6 +35,9 @@ func (s *Server) ClientDisconnected() {
 	if !s.managed {
 		return
 	}
+	if atomic.LoadInt32(&activeChatStreams) > 0 {
+		return
+	}
 	if s.socketSrv != nil && s.socketSrv.ChatSessions() > 0 {
 		return
 	}
@@ -54,12 +57,7 @@ func (s *Server) Start() error {
 	socketSrv.Start()
 	log.Println("✓ Socket server started")
 
-	if config.Config != nil && config.Config.MCP.Enabled {
-		caps := brain.LoadActiveCapabilities()
-		mcp.Init(config.Config.MCP, caps)
-	} else {
-		log.Println("- MCP disabled")
-	}
+	log.Println("- MCP: lazy init on first chat (if enabled)")
 
 	if config.Config != nil && config.Config.Evolution.Enabled {
 		interval := time.Duration(config.Config.Evolution.CycleInterval) * time.Second
@@ -104,7 +102,6 @@ func (s *Server) Stop() {
 	}
 	time.Sleep(100 * time.Millisecond)
 	log.Println("Server stopped")
-	os.Exit(0)
 }
 
 // Wait 阻塞直到收到停止信号。

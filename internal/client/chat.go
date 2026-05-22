@@ -80,6 +80,10 @@ func (s *session) call(r req) (resp, error) {
 
 // RunChat 启动终端交互（默认 cata / cata chat）。
 func RunChat() {
+	if err := config.InitBrainPath(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -155,6 +159,16 @@ func RunChat() {
 		}
 		if err := s.drainStream(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
+			if connLost(err) {
+				fmt.Fprintln(os.Stderr, "提示: 与 cata server 的连接已断开。请直接再发一条消息（将自动重连 server），勿在 › 下输入 1 确认命令。")
+				_ = s.conn.Close()
+				_ = EnsureServer()
+				if ns, derr := dial(); derr == nil {
+					s.conn = ns.conn
+					s.br = ns.br
+					fmt.Fprintln(os.Stderr, "# 已重新连接 cata server")
+				}
+			}
 		}
 	}
 }
@@ -288,6 +302,17 @@ func printExecBlock(cmd, cwd, output string) {
 	if strings.TrimSpace(output) != "" {
 		fmt.Fprintf(os.Stderr, "\n%s\n", strings.TrimRight(output, "\n"))
 	}
+}
+
+func connLost(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "forcibly closed") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "use of closed network")
 }
 
 func truncate(s string, n int) string {

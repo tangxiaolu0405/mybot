@@ -29,5 +29,8 @@ func RunSessionCompress(ctx context.Context) error {
 		interval = config.Config.Evolution.CycleInterval
 	}
 	e := NewEngine(time.Duration(interval) * time.Second)
-	return e.runCycle(ctx, ws, true)
+	if err := e.runCycle(ctx, ws, true, false); err != nil {
+		return err
+	}
+	return RunCrystallize(ctx)
 }

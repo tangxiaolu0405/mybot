@@ -23,6 +23,11 @@ func DefaultContextWindow(model string) int {
 		return 16385
 	case strings.Contains(m, "o1"), strings.Contains(m, "o3"):
 		return 128000
+	case strings.Contains(m, "deepseek"):
+		if strings.Contains(m, "v4-pro") || strings.Contains(m, "reasoner") {
+			return 128000
+		}
+		return 128000
 	case strings.Contains(m, "qwen"), strings.Contains(m, "tongyi"), strings.Contains(m, "dashscope"):
 		if strings.Contains(m, "max") || strings.Contains(m, "plus") {
 			return 128000

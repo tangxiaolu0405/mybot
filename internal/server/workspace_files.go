@@ -1,12 +1,12 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	"mybot/internal/config"
+	"mybot/internal/llm"
 )
 
 func workspaceFileLimits() (maxRead, maxWrite int) {
@@ -33,7 +33,7 @@ func toolReadFile(argsJSON string) (string, error) {
 		Offset int    `json:"offset"`
 		Limit  int    `json:"limit"`
 	}
-	if err := json.Unmarshal([]byte(argsJSON), &p); err != nil {
+	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
 		return "", fmt.Errorf("read_file args: %w", err)
 	}
 	if strings.TrimSpace(p.Path) == "" {
@@ -77,7 +77,7 @@ func toolSearchReplace(argsJSON string) (string, error) {
 		NewString   string `json:"new_string"`
 		ReplaceAll  bool   `json:"replace_all"`
 	}
-	if err := json.Unmarshal([]byte(argsJSON), &p); err != nil {
+	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
 		return "", fmt.Errorf("search_replace args: %w", err)
 	}
 	if strings.TrimSpace(p.Path) == "" {
@@ -126,7 +126,7 @@ func toolAppendFile(argsJSON string) (string, error) {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	}
-	if err := json.Unmarshal([]byte(argsJSON), &p); err != nil {
+	if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
 		return "", fmt.Errorf("append_file args: %w", err)
 	}
 	if strings.TrimSpace(p.Path) == "" {

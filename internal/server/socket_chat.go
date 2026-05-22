@@ -14,7 +14,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"mybot/internal/brain"
@@ -24,6 +26,8 @@ import (
 	"mybot/internal/llm"
 	"mybot/internal/mcp"
 )
+
+var activeChatStreams int32
 
 // 压缩后 socket history 目标占用（相对 context_window 的比例，为回复与 tool 留空）。
 const historyBudgetAfterCompressRatio = 0.40
@@ -44,7 +48,20 @@ func (ss *SocketServer) emitStreamLine(conn net.Conn, ev map[string]interface{})
 }
 
 // handleTerminalChatStream 流式 + 服务端工具循环；协议为多条 NDJSON，最后一条 type=done。
-func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.Message, userText string) error {
+func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.Message, userText string) (err error) {
+	atomic.AddInt32(&activeChatStreams, 1)
+	defer atomic.AddInt32(&activeChatStreams, -1)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("chat stream panic: %v\n%s", r, debug.Stack())
+			_ = ss.emitStreamLine(conn, map[string]interface{}{
+				"type": "error", "message": fmt.Sprintf("internal error: %v", r),
+			})
+			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+
 	_ = config.InitBrainPath()
 
 	text := strings.TrimSpace(userText)
@@ -61,9 +78,9 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 		return err
 	}
 
-	prevLen := len(*history)
 	*history = append(*history, llm.Message{Role: "user", Content: text})
 
+	mcp.ReinitIfNeeded()
 	tools := ss.buildTerminalChatTools()
 	if len(tools) == 0 {
 		msg := "无可用工具：请在 " + config.GetConfigPath() + " 启用 exec.enabled 或 workspace_files.enabled，然后 /exit 重进以拉起新 server。"
@@ -84,25 +101,70 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 			return ss.emitStreamLine(conn, map[string]interface{}{"type": "token", "content": s})
 		}
 
-		asst, toolCalls, _, err := client.ChatStreamRound(ctx, *history, tools, "auto", 0, 0, onDelta)
+		const maxLLMAttempts = 3
+		var asst string
+		var reasoning string
+		var toolCalls []llm.ToolCall
+		var err error
+		for attempt := 1; attempt <= maxLLMAttempts; attempt++ {
+			if attempt > 1 {
+				_ = ss.emitStreamLine(conn, map[string]interface{}{
+					"type": "progress", "message": fmt.Sprintf("LLM 超时或网络抖动，重试 %d/%d …", attempt, maxLLMAttempts),
+				})
+				time.Sleep(time.Duration(attempt) * time.Second)
+			}
+			asst, reasoning, toolCalls, _, err = client.ChatStreamRound(ctx, *history, tools, "auto", 0, 0, onDelta)
+			toolCalls = llm.NormalizeToolCalls(toolCalls)
+			if err == nil {
+				break
+			}
+			if !llm.IsRetryableChatError(err) || attempt == maxLLMAttempts {
+				break
+			}
+			log.Printf("chat stream round %d attempt %d: %v", round, attempt, err)
+		}
 		if err != nil {
-			*history = (*history)[:prevLen]
-			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": err.Error()})
+			msg := err.Error() + "\n\n本连接对话上下文已保留（含已执行的工具结果）。直接输入「继续」即可接着做，无需从头重述任务。"
+			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": msg})
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "done", "success": false})
 			return err
 		}
 
 		if len(toolCalls) == 0 {
 			if parsed, stripped := llm.ParseEmbeddedToolCalls(asst); len(parsed) > 0 {
-				toolCalls = parsed
+				toolCalls = llm.NormalizeToolCalls(parsed)
 				asst = stripped
 				_ = ss.emitStreamLine(conn, map[string]interface{}{
 					"type": "progress", "message": fmt.Sprintf("executing %d tool(s) from model output", len(parsed)),
 				})
-			} else if strings.Contains(strings.ToLower(asst), "<tool") {
-				hint := "模型返回了 tool 标记但未解析成功；请重新编译 cata 并 /exit 后重进。勿在对话里输入 1/？ 确认。"
+			} else if strings.Contains(strings.ToLower(asst), "<tool") || strings.Contains(asst, "[tool_call") {
+				hint := "模型返回了 tool 标记但未解析成功；大文件请分块 append_file。/exit 后重进以加载新 server。"
 				log.Printf("embedded tool parse failed, content prefix: %.200q", asst)
 				_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "error", "message": hint})
+			}
+		} else if len(toolCalls) > 0 {
+			// 流式 arguments 可能截断；尝试从正文中的 [tool_call name] {json} 补全
+			if parsed, stripped := llm.ParseEmbeddedToolCalls(asst); len(parsed) > 0 {
+				byName := make(map[string]llm.ToolCall)
+				for _, p := range parsed {
+					if llm.NormalizeToolArguments(p.Function.Name, p.Function.Arguments) != "" {
+						byName[p.Function.Name] = p
+					}
+				}
+				for i := range toolCalls {
+					if llm.NormalizeToolArguments(toolCalls[i].Function.Name, toolCalls[i].Function.Arguments) != "" {
+						continue
+					}
+					if p, ok := byName[toolCalls[i].Function.Name]; ok {
+						streamID := toolCalls[i].ID
+						toolCalls[i] = p
+						if streamID != "" {
+							toolCalls[i].ID = streamID
+						}
+					}
+				}
+				toolCalls = llm.NormalizeToolCalls(toolCalls)
+				asst = stripped
 			}
 		}
 
@@ -116,7 +178,12 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 			return nil
 		}
 
-		*history = append(*history, llm.Message{Role: "assistant", Content: asst, ToolCalls: toolCalls})
+		*history = append(*history, llm.Message{
+			Role:             "assistant",
+			Content:          asst,
+			ReasoningContent: reasoning,
+			ToolCalls:        toolCalls,
+		})
 
 		for _, tc := range toolCalls {
 			name := tc.Function.Name
@@ -200,14 +267,23 @@ func (ss *SocketServer) buildTerminalChatTools() []llm.Tool {
 			},
 		})
 	}
+	runSkillParams := json.RawMessage(`{"type":"object","properties":{"skill":{"type":"string","description":"Skill id from capabilities.yaml (brain skills/<id>/)"},"params":{"type":"object","description":"Optional JSON params passed to the skill script"}},"required":["skill"]}`)
+	out = append(out, llm.Tool{
+		Type: "function",
+		Function: llm.ToolFunction{
+			Name:        "run_skill",
+			Description: "Run a crystallized skill script from brain (workspace ~/.cata/brain/.../skills/<id>/). Outputs go to output cwd. Use for known tasks; use browser_* for new sites.",
+			Parameters:  runSkillParams,
+		},
+	})
 	return out
 }
 
 func (ss *SocketServer) runTerminalTool(ctx context.Context, conn net.Conn, tc llm.ToolCall) (string, error) {
 	fn := tc.Function
 	name := fn.Name
-	argsJSON := strings.TrimSpace(fn.Arguments)
-	if argsJSON == "" || argsJSON == "null" {
+	argsJSON := llm.NormalizeToolArguments(name, strings.TrimSpace(fn.Arguments))
+	if argsJSON == "" {
 		argsJSON = "{}"
 	}
 
@@ -222,7 +298,7 @@ func (ss *SocketServer) runTerminalTool(ctx context.Context, conn net.Conn, tc l
 		var p struct {
 			Argv []string `json:"argv"`
 		}
-		if err := json.Unmarshal([]byte(argsJSON), &p); err != nil {
+		if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
 			return "", fmt.Errorf("run_command args: %w", err)
 		}
 		if len(p.Argv) == 0 {
@@ -306,6 +382,13 @@ func (ss *SocketServer) runTerminalTool(ctx context.Context, conn net.Conn, tc l
 		return toolSearchReplace(argsJSON)
 	case "append_file":
 		return toolAppendFile(argsJSON)
+
+	case "run_skill":
+		var p brain.RunSkillArgs
+		if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
+			return "", fmt.Errorf("run_skill args: %w", err)
+		}
+		return brain.RunSkill(ctx, p)
 
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)

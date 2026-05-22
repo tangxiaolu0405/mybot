@@ -15,16 +15,71 @@ var (
 	reToolName      = regexp.MustCompile(`(?is)<tool\s+name="([^"]+)"`)
 	reParamCommand  = regexp.MustCompile(`(?is)<param\s+name="command"\s*>([^<]*)</param>`)
 	reParamArgv     = regexp.MustCompile(`(?is)<param\s+name="argv"\s*>([^<]*)</param>`)
+	reBracketTool   = regexp.MustCompile(`(?is)\[tool_call\s+([a-zA-Z0-9_]+)\]\s*`)
 )
 
-// ParseEmbeddedToolCalls 从 assistant 正文解析 MiniMax 等返回的 XML tool_call（API 未给 tool_calls 时）。
+// ParseEmbeddedToolCalls 从 assistant 正文解析嵌入式 tool_call（API 未给 tool_calls 或 arguments 截断时）。
+// 支持：[tool_call name] {json}、<tool_call>...</tool_call>、<tool name="...">...</tool>
 func ParseEmbeddedToolCalls(content string) (calls []ToolCall, stripped string) {
-	if !strings.Contains(strings.ToLower(content), "<tool") {
-		return nil, content
+	if strings.Contains(content, "[tool_call") {
+		if calls, stripped := parseBracketToolCalls(content); len(calls) > 0 {
+			return calls, stripped
+		}
 	}
+	if strings.Contains(strings.ToLower(content), "<tool") {
+		return parseXMLToolCalls(content)
+	}
+	return nil, content
+}
+
+func parseBracketToolCalls(content string) ([]ToolCall, string) {
+	var calls []ToolCall
 	var kept strings.Builder
 	last := 0
 	idx := 0
+	for _, loc := range reBracketTool.FindAllStringSubmatchIndex(content, -1) {
+		kept.WriteString(content[last:loc[0]])
+		name := strings.TrimSpace(content[loc[2]:loc[3]])
+		obj, ok := extractJSONObjectAt(content, loc[1])
+		if !ok {
+			last = loc[1]
+			continue
+		}
+		args := NormalizeToolArguments(name, obj)
+		if args == "" {
+			args = strings.TrimSpace(obj)
+			if args == "" {
+				last = loc[1]
+				continue
+			}
+		}
+		calls = append(calls, ToolCall{
+			ID:   fmt.Sprintf("embedded_%d", idx),
+			Type: "function",
+			Function: ToolCallFunction{
+				Name:      name,
+				Arguments: args,
+			},
+		})
+		idx++
+		end := loc[1] + len(obj)
+		if end > len(content) {
+			end = len(content)
+		}
+		last = end
+	}
+	if len(calls) == 0 {
+		return nil, content
+	}
+	kept.WriteString(content[last:])
+	return calls, strings.TrimSpace(kept.String())
+}
+
+func parseXMLToolCalls(content string) ([]ToolCall, string) {
+	var kept strings.Builder
+	last := 0
+	idx := 0
+	var calls []ToolCall
 	for _, loc := range reToolCallBlock.FindAllStringSubmatchIndex(content, -1) {
 		kept.WriteString(content[last:loc[0]])
 		inner := content[loc[2]:loc[3]]
@@ -38,7 +93,7 @@ func ParseEmbeddedToolCalls(content string) (calls []ToolCall, stripped string) 
 		return parseLooseToolBlocks(content)
 	}
 	kept.WriteString(content[last:])
-	stripped = strings.TrimSpace(kept.String())
+	stripped := strings.TrimSpace(kept.String())
 	return calls, stripped
 }
 

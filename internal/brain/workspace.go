@@ -6,7 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"mybot/internal/clock"
 )
 
 // Workspace 脑子的一格分区（~/.cata/brain/workspaces/<id>/），由 focus_path 选中，不是产出区。
@@ -92,7 +93,7 @@ func (w *Workspace) saveMeta() error {
 		"kind":        string(w.Kind),
 		"name":        w.Name,
 		"active_mode": w.ActiveMode,
-		"updated_at":  time.Now().UTC().Format(time.RFC3339),
+		"updated_at":  clock.RFC3339(),
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -111,6 +112,7 @@ func (w *Workspace) EnsureScaffold() error {
 		w.LongTermDir(),
 		w.ArchiveDir(),
 		w.ModeDir(ModeDefaultID),
+		filepath.Join(w.Dir(), DirSkills),
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0755); err != nil {
@@ -141,7 +143,7 @@ func (w *Workspace) EnsureScaffold() error {
 	if err := EnsureShortTermFileFor(w); err != nil {
 		return err
 	}
-	if err := ensureFile(w.MemoryIndexPath(), "[]\n"); err != nil {
+	if err := ensureFile(w.MemoryIndexPath(), `{"version":1,"entries":[]}`+"\n"); err != nil {
 		return err
 	}
 	return writeProjectLink(w)

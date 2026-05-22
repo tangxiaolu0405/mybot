@@ -1,0 +1,7 @@
+runner: python
+entry: script.py
+description: "Fetch limit-up / lianban stats into output cwd (dev template; evolve copies to brain skills/)"
+params:
+  date: { type: string, required: false }
+outputs:
+  - zhangtingban_analysis/lianban/连板票统计.csv

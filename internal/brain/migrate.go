@@ -3,8 +3,8 @@ package brain
 import (
 	"os"
 	"path/filepath"
-	"time"
 
+	"mybot/internal/clock"
 	"mybot/internal/config"
 )
 
@@ -43,7 +43,7 @@ func MigrateLegacyBrain() error {
 	if err := ws.EnsureScaffold(); err != nil {
 		return err
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := clock.RFC3339()
 	if err := upsertRegistryEntry(RegistryEntry{
 		ID: ws.ID, RootPath: ws.RootPath, Kind: ws.Kind,
 		CreatedAt: now, LastSeenAt: now, ActiveMode: ws.ActiveMode,

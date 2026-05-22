@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"mybot/internal/clock"
 	"mybot/internal/config"
 )
 
@@ -56,10 +57,11 @@ func printConfigUsage() {
 	fmt.Println("Examples:")
 	fmt.Println("  cata config show")
 	fmt.Println("  cata config get brain.dir")
-	fmt.Println("  cata config set llm.provider qwen")
-	fmt.Println("  cata config set llm.api_key sk-xxx")
-	fmt.Println("  cata config set llm.api_url https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
-	fmt.Println("  cata config set llm.model qwen-turbo")
+	fmt.Println("  cata config set llm.provider deepseek")
+	fmt.Println("  cata config set llm.api_key <DEEPSEEK_API_KEY>")
+	fmt.Println("  cata config set llm.api_url https://api.deepseek.com/chat/completions")
+	fmt.Println("  cata config set llm.model deepseek-v4-flash")
+	fmt.Println("  # 或环境变量 DEEPSEEK_API_KEY；千问见 config.json 内 llm_previous_qwen")
 }
 
 func handleConfigShow() {
@@ -116,6 +118,9 @@ func handleConfigSet(key, value string) {
 		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
 		os.Exit(1)
 	}
+	if key == "server.timezone" {
+		_ = clock.Init(value)
+	}
 
 	fmt.Printf("Configuration updated: %s = %s\n", key, value)
 }
@@ -154,6 +159,8 @@ func getConfigValue(cfg *config.AppConfig, key string) interface{} {
 		return cfg.Server.SocketPath
 	case "server.log_level":
 		return cfg.Server.LogLevel
+	case "server.timezone":
+		return cfg.Server.Timezone
 	case "evolution.enabled":
 		return cfg.Evolution.Enabled
 	case "evolution.cycle_interval":
@@ -217,6 +224,8 @@ func setConfigValue(cfg *config.AppConfig, key, value string) error {
 		cfg.Server.SocketPath = value
 	case "server.log_level":
 		cfg.Server.LogLevel = value
+	case "server.timezone":
+		cfg.Server.Timezone = value
 	case "evolution.enabled":
 		cfg.Evolution.Enabled = value == "true" || value == "1"
 	case "evolution.cycle_interval":

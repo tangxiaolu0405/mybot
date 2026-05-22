@@ -79,6 +79,7 @@ func runInit() {
 	if len(cfg.Exec.Whitelist) == 0 {
 		cfg.Exec.Whitelist = []string{"*"}
 	}
+	config.ApplyInitDefaults(cfg)
 
 	configPath := config.GetConfigPath()
 	created := false
@@ -102,6 +103,7 @@ func runInit() {
 	fmt.Printf("  Autonomous evolution: enabled=%v cycle_interval=%ds\n",
 		cfg.Evolution.Enabled, cfg.Evolution.CycleInterval)
 	fmt.Printf("  run_command (exec): enabled=%v\n", cfg.Exec.Enabled)
+	fmt.Printf("  timezone: %s\n", cfg.Server.Timezone)
 	fmt.Println("\nNext: cata")
 }
 

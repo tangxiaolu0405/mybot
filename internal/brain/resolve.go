@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
+	"mybot/internal/clock"
 	"mybot/internal/config"
 )
 
@@ -72,7 +72,7 @@ func ResolveWorkspace(clientCwd string) (*Workspace, error) {
 	if err := ws.EnsureScaffold(); err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := clock.RFC3339()
 	if err := upsertRegistryEntry(RegistryEntry{
 		ID:         ws.ID,
 		RootPath:   ws.RootPath,
@@ -167,7 +167,7 @@ func workspaceToEntry(w *Workspace) RegistryEntry {
 		Kind:       w.Kind,
 		Name:       w.Name,
 		ActiveMode: w.ActiveMode,
-		LastSeenAt: time.Now().UTC().Format(time.RFC3339),
+		LastSeenAt: clock.RFC3339(),
 	}
 }
 

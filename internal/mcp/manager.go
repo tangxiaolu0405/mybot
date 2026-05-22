@@ -29,7 +29,20 @@ type Manager struct {
 	maxOutput int
 }
 
-var global *Manager
+var (
+	global     *Manager
+	initMu     sync.Mutex
+	lastMCPKey string
+)
+
+// 终端 chat 仅暴露高频 browser 工具，避免 20+ 工具撑爆上下文导致网关/进程异常。
+var preferredBrowserTools = []string{
+	"browser_navigate", "browser_snapshot", "browser_click", "browser_type",
+	"browser_fill", "browser_tabs", "browser_wait_for", "browser_take_screenshot",
+	"browser_scroll", "browser_select_option", "browser_press_key", "browser_navigate_back",
+}
+
+const maxExportedMCPTools = 14
 
 // Init 按配置与 capabilities 启动 MCP；失败的服务器仅记日志。
 func Init(cfg config.MCPConfig, caps brain.Capabilities) *Manager {
@@ -78,15 +91,75 @@ func connectServer(mgr *Manager, ctx context.Context, s config.MCPServerEntry) e
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 	mgr.clients[s.Name] = c
+	exported := 0
+	byName := make(map[string]listedTool)
 	for _, t := range tools {
-		name := strings.TrimSpace(t.Name)
-		if name == "" {
+		if strings.TrimSpace(t.Name) != "" {
+			byName[t.Name] = t
+		}
+	}
+	for _, name := range preferredBrowserTools {
+		if exported >= maxExportedMCPTools {
+			break
+		}
+		t, ok := byName[name]
+		if !ok {
 			continue
 		}
 		mgr.routes[name] = &toolRoute{serverName: s.Name, toolName: name}
 		mgr.llmTools = append(mgr.llmTools, toLLMTool(t))
+		exported++
 	}
 	return nil
+}
+
+func mcpCapsKey(caps brain.Capabilities) string {
+	parts := make([]string, len(caps.MCP))
+	copy(parts, caps.MCP)
+	for i := 0; i < len(parts); i++ {
+		parts[i] = strings.ToLower(strings.TrimSpace(parts[i]))
+	}
+	return strings.Join(parts, ",")
+}
+
+// EnsureInit 按 capabilities 延迟初始化 MCP；mcp 列表变化时重建。
+func EnsureInit() {
+	initMu.Lock()
+	defer initMu.Unlock()
+	if config.Config == nil || !config.Config.MCP.Enabled {
+		global = &Manager{clients: make(map[string]*stdioClient), routes: make(map[string]*toolRoute)}
+		lastMCPKey = ""
+		return
+	}
+	caps := brain.LoadActiveCapabilities()
+	key := mcpCapsKey(caps)
+	if global != nil && key == lastMCPKey {
+		return
+	}
+	shutdownLocked()
+	caps = brain.LoadActiveCapabilities()
+	Init(config.Config.MCP, caps)
+	lastMCPKey = mcpCapsKey(caps)
+}
+
+// ReinitIfNeeded 在 capabilities.yaml 的 mcp 段变化后重建（新 chat 连接时调用）。
+func ReinitIfNeeded() {
+	EnsureInit()
+}
+
+func shutdownLocked() {
+	if global == nil {
+		return
+	}
+	for name, c := range global.clients {
+		if err := c.Close(); err != nil {
+			log.Printf("MCP close %q: %v", name, err)
+		}
+	}
+	global.clients = nil
+	global.routes = nil
+	global.llmTools = nil
+	global = nil
 }
 
 func (mgr *Manager) connectServer(ctx context.Context, s config.MCPServerEntry) error {
@@ -114,6 +187,7 @@ func toLLMTool(t listedTool) llm.Tool {
 
 // Global 返回已初始化的 MCP 管理器（可能为 nil 或无工具）。
 func Global() *Manager {
+	EnsureInit()
 	return global
 }
 
@@ -136,15 +210,18 @@ func (mgr *Manager) TryCall(ctx context.Context, name, argsJSON string) (out str
 	}
 	mgr.mu.RLock()
 	route, exists := mgr.routes[name]
-	client := mgr.clients[route.serverName]
+	var client *stdioClient
+	if exists && route != nil {
+		client = mgr.clients[route.serverName]
+	}
 	mgr.mu.RUnlock()
-	if !exists || client == nil {
+	if !exists || route == nil || client == nil {
 		return "", nil, false
 	}
 	var args map[string]interface{}
 	if strings.TrimSpace(argsJSON) == "" || argsJSON == "null" {
 		args = map[string]interface{}{}
-	} else if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+	} else if err := llm.ParseToolArguments(argsJSON, &args); err != nil {
 		return "", fmt.Errorf("mcp args: %w", err), true
 	}
 	callCtx := ctx
@@ -162,18 +239,8 @@ func (mgr *Manager) TryCall(ctx context.Context, name, argsJSON string) (out str
 
 // Shutdown 关闭所有 MCP 子进程。
 func Shutdown() {
-	if global == nil {
-		return
-	}
-	global.mu.Lock()
-	defer global.mu.Unlock()
-	for name, c := range global.clients {
-		if err := c.Close(); err != nil {
-			log.Printf("MCP close %q: %v", name, err)
-		}
-	}
-	global.clients = nil
-	global.routes = nil
-	global.llmTools = nil
-	global = nil
+	initMu.Lock()
+	defer initMu.Unlock()
+	shutdownLocked()
+	lastMCPKey = ""
 }

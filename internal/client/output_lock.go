@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"mybot/internal/brain"
+	"mybot/internal/clock"
 )
 
 type lockMeta struct {
@@ -36,7 +36,7 @@ func AcquireOutputLock(outputCwd string) (release func(), err error) {
 			meta := lockMeta{
 				PID:       os.Getpid(),
 				OutputCwd: abs,
-				StartedAt: time.Now().UTC().Format(time.RFC3339),
+				StartedAt: clock.RFC3339(),
 			}
 			b, _ := json.Marshal(meta)
 			_, _ = f.Write(b)

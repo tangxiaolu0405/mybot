@@ -100,6 +100,10 @@ func TerminalBrainSystemExtension(maxPerFile, maxTotal int) string {
 		b.WriteString("\n\n")
 		b.WriteString(skills)
 	}
+	if idx := MemoryIndexPromptBlock(maxIndexPromptBytes); strings.TrimSpace(idx) != "" {
+		b.WriteString("\n\n")
+		b.WriteString(idx)
+	}
 	if strings.TrimSpace(body) != "" {
 		b.WriteString("\n\n")
 		b.WriteString(TerminalBundleSystemPrefix)

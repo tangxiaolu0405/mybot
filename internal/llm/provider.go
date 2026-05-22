@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"mybot/internal/config"
 )
 
 // Tool 定义给 LLM 暴露的「工具」（兼容 OpenAI tools/function calling）
@@ -55,6 +57,10 @@ type Provider interface {
 type OpenAIProvider struct{}
 
 // wireChatRequest 与 OpenAI Chat Completions 对齐的 JSON 负载；messages 单独构造以满足各兼容网关对 content 的校验。
+type wireThinking struct {
+	Type string `json:"type"` // enabled | disabled
+}
+
 type wireChatRequest struct {
 	Model         string                   `json:"model"`
 	Messages      []map[string]interface{} `json:"messages"`
@@ -63,6 +69,36 @@ type wireChatRequest struct {
 	Tools         []Tool                   `json:"tools,omitempty"`
 	ToolChoice    interface{}              `json:"tool_choice,omitempty"`
 	Stream        bool                     `json:"stream,omitempty"`
+	Thinking      *wireThinking            `json:"thinking,omitempty"`
+}
+
+func isDeepSeekAPIURL(apiURL string) bool {
+	return strings.Contains(strings.ToLower(apiURL), "deepseek.com")
+}
+
+// resolveDeepSeekThinking 见 https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
+func resolveDeepSeekThinking(apiURL string, tools []Tool) *wireThinking {
+	if !isDeepSeekAPIURL(apiURL) {
+		return nil
+	}
+	mode := "auto"
+	if config.Config != nil {
+		switch strings.ToLower(strings.TrimSpace(config.Config.LLM.Thinking)) {
+		case "enabled", "disabled":
+			mode = strings.ToLower(strings.TrimSpace(config.Config.LLM.Thinking))
+		}
+	}
+	switch mode {
+	case "disabled":
+		return &wireThinking{Type: "disabled"}
+	case "enabled":
+		return &wireThinking{Type: "enabled"}
+	default:
+		if len(tools) > 0 {
+			return &wireThinking{Type: "disabled"}
+		}
+		return nil
+	}
 }
 
 // messagesForChatCompletionsWire 将 Message 转为 JSON 对象切片。
@@ -86,18 +122,22 @@ func messagesForChatCompletionsWire(messages []Message) []map[string]interface{}
 		if m.Name != "" {
 			mm["name"] = m.Name
 		}
+		if m.Role == "assistant" && strings.TrimSpace(m.ReasoningContent) != "" {
+			mm["reasoning_content"] = m.ReasoningContent
+		}
 		out = append(out, mm)
 	}
 	return out
 }
 
-func marshalChatCompletionsBody(model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) ([]byte, error) {
+func marshalChatCompletionsBody(apiURL, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) ([]byte, error) {
 	req := wireChatRequest{
 		Model:       model,
 		Messages:    messagesForChatCompletionsWire(messages),
 		MaxTokens:   maxTokens,
 		Temperature: temperature,
 		Stream:      stream,
+		Thinking:    resolveDeepSeekThinking(apiURL, tools),
 	}
 	if len(tools) > 0 {
 		req.Tools = tools
@@ -109,7 +149,7 @@ func marshalChatCompletionsBody(model string, messages []Message, maxTokens int,
 }
 
 func (p *OpenAIProvider) BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) (*http.Request, error) {
-	reqBody, err := marshalChatCompletionsBody(model, messages, maxTokens, temperature, tools, toolChoice, stream)
+	reqBody, err := marshalChatCompletionsBody(apiURL, model, messages, maxTokens, temperature, tools, toolChoice, stream)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -156,7 +196,11 @@ func (p *OpenAIProvider) ParseResponse(body []byte) (string, []ToolCall, error) 
 	}
 
 	first := resp.Choices[0]
-	return first.Message.Content, first.ToolCalls, nil
+	tc := first.Message.ToolCalls
+	if len(tc) == 0 {
+		tc = first.ToolCalls
+	}
+	return first.Message.Content, tc, nil
 }
 
 func (p *OpenAIProvider) GetAPIKeyHeader(apiKey string) (string, string) {
@@ -189,7 +233,7 @@ type QwenResponse struct {
 }
 
 func (p *QwenProvider) BuildRequest(apiURL string, apiKey string, model string, messages []Message, maxTokens int, temperature float64, tools []Tool, toolChoice string, stream bool) (*http.Request, error) {
-	reqBody, err := marshalChatCompletionsBody(model, messages, maxTokens, temperature, tools, toolChoice, stream)
+	reqBody, err := marshalChatCompletionsBody(apiURL, model, messages, maxTokens, temperature, tools, toolChoice, stream)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -290,7 +334,7 @@ func (p *QwenProvider) ParseResponse(body []byte) (string, []ToolCall, error) {
 	}
 	
 	first := openAIResp.Choices[0]
-	return first.Message.Content, first.ToolCalls, nil
+	return first.Message.Content, first.Message.ToolCalls, nil
 }
 
 func (p *QwenProvider) GetAPIKeyHeader(apiKey string) (string, string) {
@@ -300,13 +344,14 @@ func (p *QwenProvider) GetAPIKeyHeader(apiKey string) (string, string) {
 
 // GetProvider 根据提供商名称获取 Provider 实例
 // 支持的提供商：
-//   - openai: OpenAI API（默认）
+//   - openai / deepseek: OpenAI 兼容 Chat Completions（DeepSeek 见 https://api.deepseek.com）
 //   - qwen/tongyi/dashscope: 通义千问（DashScope API）
-//   - 自定义：可以通过实现 Provider 接口添加新的提供商
 func GetProvider(providerName string) Provider {
 	switch strings.ToLower(providerName) {
 	case "qwen", "tongyi", "dashscope":
 		return &QwenProvider{}
+	case "deepseek":
+		return &OpenAIProvider{}
 	case "openai", "":
 		fallthrough
 	default:

@@ -9,7 +9,8 @@ const (
 	shortTermActivityBytes = 512
 	archiveSummarizeMinFiles = 25
 	maxShortExcerptBytes    = 2400
-	maxUpdatesPerCycle      = 3
+	maxUpdatesPerCycle            = 3
+	maxCrystallizeUpdatesPerCycle = 8
 	minPatchContentRunes    = 24
 	maxLogEntries           = 80
 )

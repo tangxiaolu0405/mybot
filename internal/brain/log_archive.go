@@ -5,7 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"mybot/internal/clock"
 )
 
 const (
@@ -70,7 +71,7 @@ func archivedLogPath(path string) (string, error) {
 	base := filepath.Base(path)
 	ext := filepath.Ext(base)
 	name := strings.TrimSuffix(base, ext)
-	ts := time.Now().Format("20060102-150405")
-	n := int(time.Now().UnixNano() % 1000)
+	ts := clock.Format("20060102-150405")
+	n := int(clock.Now().UnixNano() % 1000)
 	return filepath.Join(dir, fmt.Sprintf("%s.%s-%03d%s", name, ts, n, ext)), nil
 }

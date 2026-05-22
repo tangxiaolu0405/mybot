@@ -124,6 +124,9 @@ func (ss *SocketServer) Stop() {
 func (ss *SocketServer) handleConnection(conn net.Conn) {
 	var chatSession bool
 	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("connection handler panic: %v", r)
+		}
 		conn.Close()
 		if chatSession {
 			if atomic.AddInt32(&ss.chatSessions, -1) == 0 {

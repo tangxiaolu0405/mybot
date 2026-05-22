@@ -76,13 +76,13 @@ func (e *Engine) runAll(ctx context.Context) {
 	}
 	for _, ws := range list {
 		brain.SetActive(ws)
-		if err := e.runCycle(ctx, ws, false); err != nil {
+		if err := e.runCycle(ctx, ws, false, false); err != nil {
 			log.Printf("Autonomous evolution [%s]: %v", ws.ID, err)
 		}
 	}
 }
 
-func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompress bool) error {
+func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompress, crystallize bool) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -97,7 +97,21 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 	lastFP := e.lastFingerprint[ws.ID]
 	e.mu.Unlock()
 
-	if sessionCompress {
+	if crystallize {
+		if snap.ShortTermBytes < crystallizeMinShortBytes {
+			log.Printf("Autonomous evolution [%s]: crystallize skipped (short-term too small)", ws.ID)
+			return nil
+		}
+		if excerpt, err := readFileCap(brain.ShortTermCurrentPath(), maxShortExcerptBytes); err == nil {
+			appendCrystallizeTriggers(snap, excerpt)
+		}
+		snap.Triggers = append(snap.Triggers, "high_token_session")
+		if !shouldInvokeCrystallize(snap) {
+			log.Printf("Autonomous evolution [%s]: crystallize skipped (no triggers)", ws.ID)
+			return nil
+		}
+		log.Printf("Autonomous evolution [%s]: crystallize_skill (%s)", ws.ID, strings.Join(snap.Triggers, ","))
+	} else if sessionCompress {
 		if snap.ShortTermBytes < sessionCompressMinShortBytes {
 			log.Printf("Autonomous evolution [%s]: session compress skipped (short-term too small)", ws.ID)
 			return nil
@@ -117,10 +131,12 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 		return fmt.Errorf("LLM: %w", err)
 	}
 
-	prompt := buildDecisionPrompt(snap, sessionCompress)
+	prompt := buildDecisionPrompt(snap, sessionCompress, crystallize)
 	sys := evolutionSystemPrompt()
 	if sessionCompress {
 		sys = evolutionSessionCompressPrompt()
+	} else if crystallize {
+		sys = evolutionCrystallizePrompt()
 	}
 	messages := []llm.Message{
 		{Role: "system", Content: sys},
@@ -136,7 +152,11 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 	if err != nil {
 		return fmt.Errorf("parse: %w", err)
 	}
-	dec.Updates = filterUpdates(dec.Updates)
+	if crystallize {
+		dec.Updates = filterUpdatesCrystallize(dec.Updates)
+	} else {
+		dec.Updates = filterUpdates(dec.Updates)
+	}
 
 	var touched []string
 	action := strings.ToLower(strings.TrimSpace(dec.Action))
@@ -145,6 +165,9 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 		if err != nil {
 			return fmt.Errorf("apply: %w", err)
 		}
+	}
+	if crystallize && (action == "crystallize_skill" || len(touched) > 0) {
+		ingestCrystallizedSkills(ws, touched)
 	}
 
 	if !isMeaningfulDecision(dec, touched) {
@@ -159,14 +182,29 @@ func (e *Engine) runCycle(ctx context.Context, ws *brain.Workspace, sessionCompr
 	if learning == "" {
 		learning = dec.Reason
 	}
-	if err := AppendLog(LogEntry{
+	entry := LogEntry{
 		WorkspaceID: ws.ID,
 		ModeID:      ws.ActiveMode,
 		Action:      dec.Action,
 		Reason:      dec.Reason,
 		Learning:    learning,
 		DocTouched:  touched,
-	}); err != nil {
+	}
+	if shouldFinalizeShortTerm(dec, touched, snap, sessionCompress) {
+		if arch, err := brain.FinalizeShortTermAfterConsolidate(brain.DefaultKeepRecentAfterConsolidate); err != nil {
+			log.Printf("Autonomous evolution [%s]: short-term finalize: %v", ws.ID, err)
+		} else if arch != "" {
+			entry.DocTouched = append(entry.DocTouched, arch)
+			log.Printf("Autonomous evolution [%s]: short-term archived to %s", ws.ID, arch)
+			if fresh, err := Observe(); err == nil {
+				snap = fresh
+			}
+		}
+	}
+	if err := brain.SyncMemoryIndexAfterEvolution(entry.DocTouched, learning, archRel(entry.DocTouched)); err != nil {
+		log.Printf("Autonomous evolution [%s]: memory index: %v", ws.ID, err)
+	}
+	if err := AppendLog(entry); err != nil {
 		return err
 	}
 
@@ -190,9 +228,9 @@ persona 由你从脑子内 short-term 提炼；终端对话不直接改 persona�
 
 输出：单个 JSON 对象。
 字段：action, reason, learning, updates[]
-- path 相对 workspace 根，例如：modes/_default/persona.md、persona.local.md、memory/short/current.md、memory/long/note.md
-- consolidate：short → modes/<mode>/persona.md，必要时写 memory/long/
-- 禁止整篇重写 constraints；persona 用 append
+- path 相对 workspace 根，例如：modes/_default/persona.md、persona.local.md、memory/long/note.md
+- consolidate：把 short_term excerpt 中的**新事实**写入 modes/<mode>/persona.md（append），细节写 memory/long/*.md；**不要** patch memory/short/current.md（服务端会归档并更新 memory/index.json）
+- 禁止整篇重写 constraints；persona 只 append 不重复已有段落
 
 默认 idle。`
 }
@@ -200,24 +238,57 @@ persona 由你从脑子内 short-term 提炼；终端对话不直接改 persona�
 func evolutionSessionCompressPrompt() string {
 	return evolutionSystemPrompt() + `
 
-本轮为「对话轮次阈值」触发的强制压缩：action 应为 consolidate；将 short-term 稳定内容写入 modes/<mode>/persona.md，重复内容可写入 memory/long/ 或从 short-term 删减；不要 idle。`
+本轮为「对话轮次阈值」触发的强制压缩：action 应为 consolidate；将 short-term 中的新事实写入 modes/<mode>/persona.md，细节摘要可 append 到 memory/long/*.md；不要 idle；不要 patch short/current.md。`
 }
 
-func buildDecisionPrompt(snap *Snapshot, sessionCompress bool) string {
+func evolutionCrystallizePrompt() string {
+	return `你是 Cata 自主演进模块（固化 skill）。
+
+将 short-term 中**已验证**的探索流程固化为脑子内可执行 skill，供后续 run_skill 复用。
+
+输出单个 JSON：action, reason, learning, updates[]
+- action 应为 crystallize_skill（无合适固化则 idle）
+- path 相对 workspace 根，仅允许：
+  - skills/<skill-id>/SKILL.md（流程：何时用 run_skill、不适用时仍用 browser）
+  - skills/<skill-id>/manifest.yaml（runner: python, entry: script.py）
+  - skills/<skill-id>/script.py（从 excerpt 成功命令提炼，标准库优先）
+- skill-id 用小写英文与连字符，如 zhangtingban-lianban
+- **禁止** patch modes/*/capabilities.yaml（服务端会自动 append skills 列表）
+- **禁止** 写入 mcp: [] 或删除 browser；未覆盖站点仍依赖 browser 基础能力
+- SKILL 中写明：适用场景（如东财 A 站）、输出路径（相对产出区 cwd）、禁止 browser_snapshot 整页抓取`
+}
+
+func buildDecisionPrompt(snap *Snapshot, sessionCompress, crystallize bool) string {
 	var b strings.Builder
 	b.WriteString("triggers: ")
 	b.WriteString(strings.Join(snap.Triggers, ", "))
 	if sessionCompress {
 		b.WriteString(" (session-driven compress)")
 	}
+	if crystallize {
+		b.WriteString(" (crystallize_skill)")
+	}
+	if len(snap.SkillIDs) > 0 {
+		b.WriteString("\nexisting_skills: ")
+		b.WriteString(strings.Join(snap.SkillIDs, ", "))
+	}
 	b.WriteString("\nstate: ")
 	compact, _ := json.Marshal(snap)
 	b.Write(compact)
 
 	if snap.ShortTermBytes >= shortTermActivityBytes {
-		if excerpt, err := readFileCap(brain.ShortTermCurrentPath(), maxShortExcerptBytes); err == nil && excerpt != "" {
-			b.WriteString("\n\nshort_term excerpt:\n")
-			b.WriteString(excerpt)
+		includeExcerpt := true
+		if snap.LastEvolutionAt != "" && snap.ShortTermModTime != "" &&
+			snap.ShortTermModTime <= snap.LastEvolutionAt && snap.ShortTermBytes < shortTermTriggerBytes {
+			includeExcerpt = false
+		}
+		if includeExcerpt {
+			if excerpt, err := readFileCap(brain.ShortTermCurrentPath(), maxShortExcerptBytes); err == nil && excerpt != "" {
+				b.WriteString("\n\nshort_term excerpt:\n")
+				b.WriteString(excerpt)
+			}
+		} else {
+			b.WriteString("\n\n(short_term unchanged since last evolution; excerpt omitted)\n")
 		}
 		if hot, err := readFileCap(brain.HotPath(), 1200); err == nil && hot != "" {
 			b.WriteString("\n\ncurrent mode persona (merge here, append only):\n")
@@ -254,5 +325,5 @@ func RunCycle(ctx context.Context) error {
 	if config.Config != nil && config.Config.Evolution.CycleInterval > 0 {
 		interval = time.Duration(config.Config.Evolution.CycleInterval) * time.Second
 	}
-	return NewEngine(interval).runCycle(ctx, ws, false)
+	return NewEngine(interval).runCycle(ctx, ws, false, false)
 }

@@ -3,9 +3,9 @@ package evolve
 import (
 	"encoding/json"
 	"os"
-	"time"
 
 	"mybot/internal/brain"
+	"mybot/internal/clock"
 )
 
 // EvolutionLog 单 workspace 演进日志。
@@ -40,7 +40,7 @@ func AppendLog(entry LogEntry) error {
 		log.Entries = []LogEntry{}
 	}
 	if entry.Timestamp == "" {
-		entry.Timestamp = time.Now().UTC().Format(time.RFC3339)
+		entry.Timestamp = clock.RFC3339()
 	}
 	if entry.Status == "" {
 		entry.Status = "completed"

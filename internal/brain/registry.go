@@ -5,7 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
+
+	"mybot/internal/clock"
 )
 
 // WorkspaceKind 工作区类型。
@@ -105,7 +106,7 @@ func touchRegistryEntry(id string) {
 	if err != nil {
 		return
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := clock.RFC3339()
 	for i := range rf.Workspaces {
 		if rf.Workspaces[i].ID == id {
 			rf.Workspaces[i].LastSeenAt = now

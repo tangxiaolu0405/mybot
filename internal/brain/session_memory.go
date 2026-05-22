@@ -5,7 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"mybot/internal/clock"
 )
 
 const (
@@ -13,6 +14,8 @@ const (
 	maxTurnAssistantRunes  = 2000
 	maxShortTermFileBytes  = 96 * 1024
 	shortTermFileHeader    = "# Current session (short-term)\n\n> Appended by cata after each chat turn. Consolidated into persona by autonomous evolution.\n\n"
+	// DefaultKeepRecentAfterConsolidate 演进归档后保留在 short-term 的尾部字节（最近几轮对话）。
+	DefaultKeepRecentAfterConsolidate = 2048
 )
 
 // AppendChatTurn 在对话成功结束后写入当前 workspace 的 short-term。
@@ -45,13 +48,13 @@ func AppendSessionBoundary() error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	ts := time.Now().UTC().Format(time.RFC3339)
+	ts := clock.RFC3339()
 	block := fmt.Sprintf("\n\n---\n\n**Session ended** `%s` (socket history cleared)\n\n", ts)
 	return appendToShortTerm(path, block)
 }
 
 func formatTurnBlock(user, assistant string) string {
-	ts := time.Now().UTC().Format(time.RFC3339)
+	ts := clock.RFC3339()
 	var b strings.Builder
 	b.WriteString("\n\n## ")
 	b.WriteString(ts)
@@ -135,6 +138,70 @@ func EnsureShortTermFileFor(w *Workspace) error {
 		return os.WriteFile(path, []byte(shortTermFileHeader), 0644)
 	}
 	return err
+}
+
+// FinalizeShortTermAfterConsolidate 将当前 short-term 归档到 memory/long/ 并重置文件，避免演进重复喂同一段原文。
+// keepRecentBytes 为 0 时使用 DefaultKeepRecentAfterConsolidate。
+func FinalizeShortTermAfterConsolidate(keepRecentBytes int) (archivedRel string, err error) {
+	w, err := MustActive()
+	if err != nil {
+		return "", err
+	}
+	if keepRecentBytes <= 0 {
+		keepRecentBytes = DefaultKeepRecentAfterConsolidate
+	}
+	path := w.ShortTermPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	if len(data) < len(shortTermFileHeader)+256 {
+		return "", nil
+	}
+
+	ts := clock.RFC3339()
+	archiveName := fmt.Sprintf("consolidated-%s.md", clock.Format("2006-01-02-150405"))
+	archivedRel = filepath.Join(RelMemoryLong, archiveName)
+	archiveAbs := w.Path(archivedRel)
+	if err := os.MkdirAll(filepath.Dir(archiveAbs), 0755); err != nil {
+		return "", err
+	}
+	archiveDoc := fmt.Sprintf("# Short-term archive\n\n> Archived at %s after evolution consolidate.\n\n%s",
+		ts, string(data))
+	if err := os.WriteFile(archiveAbs, []byte(archiveDoc), 0644); err != nil {
+		return "", err
+	}
+
+	recent := tailFromTurnBoundary(data, keepRecentBytes)
+	var b strings.Builder
+	b.WriteString(shortTermFileHeader)
+	b.WriteString("> Last consolidated `")
+	b.WriteString(ts)
+	b.WriteString("`. Older turns moved to `")
+	b.WriteString(filepath.ToSlash(archivedRel))
+	b.WriteString("`. Recent turns below.\n\n")
+	if len(recent) > 0 {
+		b.Write(recent)
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
+		return archivedRel, err
+	}
+	return archivedRel, nil
+}
+
+// tailFromTurnBoundary 取文件尾部，尽量从 "## " 回合标题处切开。
+func tailFromTurnBoundary(data []byte, maxBytes int) []byte {
+	if maxBytes <= 0 || len(data) <= maxBytes {
+		return data
+	}
+	tail := data[len(data)-maxBytes:]
+	if idx := strings.Index(string(tail), "\n\n## "); idx > 0 {
+		return tail[idx+2:]
+	}
+	return tail
 }
 
 // EnsureShortTermFile 活跃 workspace 或 legacy 路径。

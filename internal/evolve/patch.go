@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"mybot/internal/brain"
+	"mybot/internal/clock"
 )
 
 // DocUpdate LLM 决策输出的文档补丁（路径相对当前 workspace 根）。
@@ -98,10 +98,22 @@ func normalizeWorkspaceRel(p string) (string, error) {
 		return brain.RelShortCurrent, nil
 	}
 	if strings.HasPrefix(p, brain.RelMemoryLong+"/") && strings.HasSuffix(p, ".md") {
-		return p, nil
+		return filepath.ToSlash(p), nil
 	}
 	if strings.HasPrefix(p, brain.RelMemoryArchive+"/") && strings.HasSuffix(p, ".md") {
 		return p, nil
+	}
+
+	if strings.HasPrefix(p, brain.DirSkills+"/") {
+		parts := strings.Split(p, "/")
+		if len(parts) < 3 {
+			return "", fmt.Errorf("invalid skill path: %s", p)
+		}
+		file := parts[2]
+		if file == brain.FileSkillMD || file == brain.FileSkillManifest || isSkillScriptFile(file) {
+			return p, nil
+		}
+		return "", fmt.Errorf("skill file not allowed: %s", file)
 	}
 
 	// legacy aliases
@@ -116,18 +128,28 @@ func normalizeWorkspaceRel(p string) (string, error) {
 	return "", fmt.Errorf("path not in evolution whitelist: %s", p)
 }
 
+func isSkillScriptFile(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".py", ".js", ".sh", ".ps1":
+		return true
+	default:
+		return false
+	}
+}
+
 // TouchArchiveDay 创建当日 archive 占位。
 func TouchArchiveDay() (string, error) {
 	w, err := brain.MustActive()
 	if err != nil {
 		return "", err
 	}
-	rel := filepath.Join(brain.RelMemoryArchive, time.Now().Format("2006-01-02")+".md")
+	rel := filepath.Join(brain.RelMemoryArchive, clock.Format("2006-01-02")+".md")
 	abs := w.Path(rel)
 	if _, err := os.Stat(abs); err == nil {
 		return rel, nil
 	}
-	content := fmt.Sprintf("# %s\n\n", time.Now().Format("2006-01-02"))
+	content := fmt.Sprintf("# %s\n\n", clock.Format("2006-01-02"))
 	if err := os.WriteFile(abs, []byte(content), 0644); err != nil {
 		return "", err
 	}

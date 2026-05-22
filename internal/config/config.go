@@ -6,15 +6,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"mybot/internal/clock"
 )
 
 const (
-	DefaultBrainDirName    = "brain"
-	DefaultAppConfigName   = "config.json"
-	EnvCataHome            = "CATA_HOME"
-	EnvBrainDir            = "CATA_BRAIN_DIR"
-	EnvConfigFile          = "CATA_CONFIG_FILE"
-	EnvExecEnabled         = "CATA_EXEC_ENABLED"
+	DefaultBrainDirName  = "brain"
+	DefaultAppConfigName = "config.json"
+	EnvCataHome          = "CATA_HOME"
+	EnvBrainDir          = "CATA_BRAIN_DIR"
+	EnvConfigFile        = "CATA_CONFIG_FILE"
+	EnvExecEnabled       = "CATA_EXEC_ENABLED"
 )
 
 var (
@@ -67,21 +69,25 @@ type LLMConfig struct {
 	MaxTokens     int               `json:"max_tokens"`
 	Timeout       int               `json:"timeout"`
 	ContextWindow int               `json:"context_window"`
-	Enabled       bool              `json:"enabled"`
+	// Thinking DeepSeek 思考模式：auto（有 tools 时 disabled）、enabled、disabled
+	Thinking  string `json:"thinking,omitempty"`
+	Enabled   bool   `json:"enabled"`
 }
 
 // ServerConfig 服务器配置。
 type ServerConfig struct {
 	SocketPath string `json:"socket_path"`
 	LogLevel   string `json:"log_level"`
+	// Timezone IANA 时区名，如 Asia/Shanghai；影响日志、llm.log、演进与 short-term 时间戳。
+	Timezone string `json:"timezone"`
 }
 
 // EvolutionConfig 后台自主演进与会话压缩触发。
 type EvolutionConfig struct {
-	Enabled                bool    `json:"enabled"`
-	CycleInterval          int     `json:"cycle_interval"`
-	ContextCompressRatio   float64 `json:"context_compress_ratio"`
-	SessionCompressTurns   int     `json:"session_compress_turns"`
+	Enabled              bool    `json:"enabled"`
+	CycleInterval        int     `json:"cycle_interval"`
+	ContextCompressRatio float64 `json:"context_compress_ratio"`
+	SessionCompressTurns int     `json:"session_compress_turns"`
 }
 
 // ExecToolConfig 终端 chat 的 run_command（os/exec，不经 shell）。
@@ -187,17 +193,18 @@ func getDefaultConfig() *AppConfig {
 	return &AppConfig{
 		Brain: BrainConfig{},
 		LLM: LLMConfig{
-			Provider: getDefaultProvider(),
-			APIKey:   getDefaultAPIKey(),
-			APIURL:   getDefaultAPIURL(),
-			Model:    getDefaultModel(),
+			Provider:  getDefaultProvider(),
+			APIKey:    getDefaultAPIKey(),
+			APIURL:    getDefaultAPIURL(),
+			Model:     getDefaultModel(),
 			MaxTokens: 2000,
-			Timeout:   60,
+			Timeout:   600,
 			Enabled:   getDefaultAPIKey() != "",
 		},
 		Server: ServerConfig{
 			SocketPath: "",
 			LogLevel:   "info",
+			Timezone:   clock.DefaultTimezone,
 		},
 		Evolution: EvolutionConfig{
 			Enabled:              true,
@@ -247,7 +254,14 @@ func applyEnvOverrides(config *AppConfig) {
 	if v := strings.TrimSpace(os.Getenv(EnvExecEnabled)); v == "1" || strings.EqualFold(v, "true") {
 		config.Exec.Enabled = true
 	}
-	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+	if apiKey := os.Getenv("DEEPSEEK_API_KEY"); apiKey != "" && config.LLM.APIKey == "" {
+		config.LLM.APIKey = apiKey
+		if config.LLM.Provider == "" || config.LLM.Provider == "qwen" {
+			config.LLM.Provider = "deepseek"
+		}
+		config.LLM.Enabled = true
+	}
+	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" && config.LLM.APIKey == "" {
 		config.LLM.APIKey = apiKey
 		if config.LLM.Provider == "" {
 			config.LLM.Provider = "openai"
@@ -343,6 +357,7 @@ func validateAndSetDefaults(config *AppConfig) error {
 	if config.LLM.Model == "" {
 		config.LLM.Model = getDefaultModelForProvider(config.LLM.Provider)
 	}
+	normalizeLLMConfig(&config.LLM)
 	if config.LLM.APIKey != "" {
 		config.LLM.Enabled = true
 	}
@@ -369,7 +384,24 @@ func validateAndSetDefaults(config *AppConfig) error {
 		config.Evolution.SessionCompressTurns = 12
 	}
 
+	ensureServerTimezone(config)
+
 	return nil
+}
+
+// ApplyInitDefaults 在 cata init 时写入 config.json 的推荐默认值（不覆盖用户已配置的时区等）。
+func ApplyInitDefaults(cfg *AppConfig) {
+	if cfg == nil {
+		return
+	}
+	ensureServerTimezone(cfg)
+}
+
+func ensureServerTimezone(cfg *AppConfig) {
+	if strings.TrimSpace(cfg.Server.Timezone) == "" {
+		cfg.Server.Timezone = clock.DefaultTimezone
+	}
+	_ = clock.Init(cfg.Server.Timezone)
 }
 
 func normalizeMCPConfig(m *MCPConfig) {
@@ -599,6 +631,9 @@ func getDefaultProvider() string {
 	if provider := os.Getenv("LLM_PROVIDER"); provider != "" {
 		return provider
 	}
+	if os.Getenv("DEEPSEEK_API_KEY") != "" {
+		return "deepseek"
+	}
 	if os.Getenv("DASHSCOPE_API_KEY") != "" {
 		return "qwen"
 	}
@@ -609,6 +644,9 @@ func getDefaultProvider() string {
 }
 
 func getDefaultAPIKey() string {
+	if key := os.Getenv("DEEPSEEK_API_KEY"); key != "" {
+		return key
+	}
 	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
 		return key
 	}
@@ -636,6 +674,8 @@ func getDefaultAPIURLForProvider(provider string) string {
 		return url
 	}
 	switch provider {
+	case "deepseek":
+		return "https://api.deepseek.com/chat/completions"
 	case "qwen", "tongyi", "dashscope":
 		return "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 	case "claude", "anthropic":
@@ -658,11 +698,27 @@ func getDefaultModel() string {
 	return getDefaultModelForProvider(getDefaultProvider())
 }
 
+// normalizeLLMConfig 修正 OpenAI 兼容端点（DeepSeek 等仅需 base_url 时补全路径）。
+func normalizeLLMConfig(llm *LLMConfig) {
+	if llm == nil {
+		return
+	}
+	u := strings.TrimRight(strings.TrimSpace(llm.APIURL), "/")
+	switch strings.ToLower(strings.TrimSpace(llm.Provider)) {
+	case "deepseek":
+		if u == "https://api.deepseek.com" {
+			llm.APIURL = u + "/chat/completions"
+		}
+	}
+}
+
 func getDefaultModelForProvider(provider string) string {
 	if model := os.Getenv("LLM_MODEL"); model != "" {
 		return model
 	}
 	switch provider {
+	case "deepseek":
+		return "deepseek-v4-flash"
 	case "qwen", "tongyi", "dashscope":
 		return "qwen-turbo"
 	case "claude", "anthropic":

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"mybot/internal/brain"
+	"mybot/internal/clock"
 	"mybot/internal/config"
 )
 
@@ -24,8 +25,10 @@ const (
 	DefaultModel = "gpt-3.5-turbo"
 	// DefaultMaxTokens 默认最大 token 数
 	DefaultMaxTokens = 2000
-	// DefaultTimeout 默认超时时间
-	DefaultTimeout = 60 * time.Second
+	// DefaultTimeout 默认超时时间（非流式 / 等响应头）
+	DefaultTimeout = 180 * time.Second
+	// MinStreamTimeout 流式整段请求下限（多轮 tool + 长生成）
+	MinStreamTimeout = 10 * time.Minute
 
 	// 注入 API 的 brain 节选（core/workflow/hot）字节上限，减轻每轮请求的输入 token
 	maxBrainExcerptBytesPerFile = 6500
@@ -83,9 +86,50 @@ type Client struct {
 	apiURL     string
 	model      string
 	maxTokens  int
-	timeout    time.Duration
-	httpClient *http.Client
-	provider   Provider
+	timeout            time.Duration
+	httpClient         *http.Client
+	streamHTTPClient   *http.Client
+	provider           Provider
+}
+
+func streamRoundTimeout(base time.Duration) time.Duration {
+	d := base * 10
+	if d < MinStreamTimeout {
+		return MinStreamTimeout
+	}
+	return d
+}
+
+func configureHTTPTransport(timeout time.Duration) *http.Transport {
+	tr := &http.Transport{
+		ResponseHeaderTimeout: timeout,
+	}
+	proxyURL := os.Getenv("HTTP_PROXY")
+	if proxyURL == "" {
+		proxyURL = os.Getenv("HTTPS_PROXY")
+	}
+	if proxyURL == "" {
+		proxyURL = os.Getenv("ALL_PROXY")
+	}
+	if proxyURL != "" {
+		parsedProxy, err := url.Parse(proxyURL)
+		if err == nil {
+			if parsedProxy.Scheme == "http" || parsedProxy.Scheme == "https" {
+				tr.Proxy = http.ProxyURL(parsedProxy)
+				log.Printf("Using HTTP proxy: %s", proxyURL)
+			} else if parsedProxy.Scheme == "socks5" {
+				log.Printf("WARNING: SOCKS5 proxy detected (%s) but not fully supported. If you see EOF errors, try: 1) Start your proxy server, 2) Use HTTP proxy instead, or 3) Unset proxy env vars", proxyURL)
+			}
+		}
+	}
+	return tr
+}
+
+func newHTTPClientPair(timeout time.Duration) (*http.Client, *http.Client) {
+	tr := configureHTTPTransport(timeout)
+	regular := &http.Client{Timeout: timeout, Transport: tr}
+	stream := &http.Client{Timeout: streamRoundTimeout(timeout), Transport: tr}
+	return regular, stream
 }
 
 // Role 表示 LLM 使用角色（不同用途可绑定不同模型）
@@ -217,7 +261,9 @@ func NewClientFromConfig(provider, apiKey, apiURL, model string, maxTokens int, 
 		provider = os.Getenv("LLM_PROVIDER")
 		if provider == "" {
 			// 根据可用的 API Key 自动检测提供商
-			if os.Getenv("DASHSCOPE_API_KEY") != "" {
+			if os.Getenv("DEEPSEEK_API_KEY") != "" {
+				provider = "deepseek"
+			} else if os.Getenv("DASHSCOPE_API_KEY") != "" {
 				provider = "qwen"
 			} else if os.Getenv("ANTHROPIC_API_KEY") != "" {
 				provider = "claude"
@@ -232,6 +278,8 @@ func NewClientFromConfig(provider, apiKey, apiURL, model string, maxTokens int, 
 	// 如果 apiKey 为空，根据 provider 从环境变量读取
 	if apiKey == "" {
 		switch provider {
+		case "deepseek":
+			apiKey = os.Getenv("DEEPSEEK_API_KEY")
 		case "qwen", "tongyi", "dashscope":
 			apiKey = os.Getenv("DASHSCOPE_API_KEY")
 		case "claude", "anthropic":
@@ -251,8 +299,9 @@ func NewClientFromConfig(provider, apiKey, apiURL, model string, maxTokens int, 
 		if apiURL == "" {
 			// 根据 provider 设置默认 URL
 			switch provider {
+			case "deepseek":
+				apiURL = "https://api.deepseek.com/chat/completions"
 			case "qwen", "tongyi", "dashscope":
-				// 使用 OpenAI 兼容模式（推荐）
 				apiURL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 			case "claude", "anthropic":
 				apiURL = "https://api.anthropic.com/v1/messages"
@@ -271,8 +320,10 @@ func NewClientFromConfig(provider, apiKey, apiURL, model string, maxTokens int, 
 		if model == "" {
 			// 根据 provider 设置默认模型
 			switch provider {
+			case "deepseek":
+				model = "deepseek-v4-flash"
 			case "qwen", "tongyi", "dashscope":
-				model = "Qwen-Omni" // 千问默认模型
+				model = "qwen-turbo"
 			case "claude", "anthropic":
 				model = "claude-3-sonnet-20240229"
 			default:
@@ -291,48 +342,20 @@ func NewClientFromConfig(provider, apiKey, apiURL, model string, maxTokens int, 
 		timeout = DefaultTimeout
 	}
 
-	// 配置 HTTP 客户端，支持 HTTP/HTTPS 代理
-	httpClient := &http.Client{
-		Timeout: timeout,
-	}
-	
-	// 检查环境变量中的代理设置（注意：SOCKS5 代理需要额外配置）
-	proxyURL := ""
-	if proxyURL = os.Getenv("HTTP_PROXY"); proxyURL == "" {
-		if proxyURL = os.Getenv("HTTPS_PROXY"); proxyURL == "" {
-			proxyURL = os.Getenv("ALL_PROXY")
-		}
-	}
-	
-	if proxyURL != "" {
-		parsedProxy, err := url.Parse(proxyURL)
-		if err == nil {
-			// 只支持 HTTP/HTTPS 代理，SOCKS5 需要额外处理
-			if parsedProxy.Scheme == "http" || parsedProxy.Scheme == "https" {
-				httpClient.Transport = &http.Transport{
-					Proxy: http.ProxyURL(parsedProxy),
-				}
-				log.Printf("Using HTTP proxy: %s", proxyURL)
-			} else if parsedProxy.Scheme == "socks5" {
-				// SOCKS5 代理需要 golang.org/x/net/proxy 包支持
-				// 如果检测到 SOCKS5，记录警告但不阻止运行
-				log.Printf("WARNING: SOCKS5 proxy detected (%s) but not fully supported. If you see EOF errors, try: 1) Start your proxy server, 2) Use HTTP proxy instead, or 3) Unset proxy env vars", proxyURL)
-			}
-		}
-	}
+	httpClient, streamClient := newHTTPClientPair(timeout)
 
-	// 记录客户端创建信息（用于排查问题）
-	log.Printf("Creating LLM Client: Provider=%s, URL=%s, Model=%s, APIKey present=%v", 
-		provider, apiURL, model, apiKey != "")
+	log.Printf("Creating LLM Client: Provider=%s, URL=%s, Model=%s, APIKey present=%v, timeout=%s stream_timeout=%s",
+		provider, apiURL, model, apiKey != "", timeout, streamRoundTimeout(timeout))
 
 	return &Client{
-		apiKey:     apiKey,
-		apiURL:     apiURL,
-		model:      model,
-		maxTokens:  maxTokens,
-		timeout:    timeout,
-		provider:   GetProvider(provider),
-		httpClient: httpClient,
+		apiKey:           apiKey,
+		apiURL:           apiURL,
+		model:            model,
+		maxTokens:        maxTokens,
+		timeout:          timeout,
+		provider:         GetProvider(provider),
+		httpClient:       httpClient,
+		streamHTTPClient: streamClient,
 	}, nil
 }
 
@@ -356,16 +379,16 @@ func NewClientWithProvider(apiKey, apiURL, model, provider string, maxTokens int
 		timeout = DefaultTimeout
 	}
 
+	httpClient, streamClient := newHTTPClientPair(timeout)
 	return &Client{
-		apiKey:     apiKey,
-		apiURL:     apiURL,
-		model:      model,
-		maxTokens:  maxTokens,
-		timeout:    timeout,
-		provider:   GetProvider(provider),
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
+		apiKey:           apiKey,
+		apiURL:           apiURL,
+		model:            model,
+		maxTokens:        maxTokens,
+		timeout:          timeout,
+		provider:         GetProvider(provider),
+		httpClient:       httpClient,
+		streamHTTPClient: streamClient,
 	}
 }
 
@@ -373,6 +396,8 @@ func NewClientWithProvider(apiKey, apiURL, model, provider string, maxTokens int
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content,omitempty"`
+	// ReasoningContent DeepSeek 思考模式 CoT；有 tool_calls 时下一轮必须原样回传。
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 	// 助手消息携带的工具调用（发给 API 的历史轮次）
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	// role=tool 时必填
@@ -668,9 +693,9 @@ func (c *Client) buildHTTPChatRequest(ctx context.Context, req ChatRequest, tool
 		return nil, fmt.Errorf("API key is empty")
 	}
 	if injectBrain {
-		req.Messages = compactMessageContentForAPI(withBootLeaderSystemMessage(req.Messages))
+		req.Messages = SanitizeMessagesToolCalls(compactMessageContentForAPI(withBootLeaderSystemMessage(req.Messages)))
 	} else {
-		req.Messages = compactMessageContentForAPI(req.Messages)
+		req.Messages = SanitizeMessagesToolCalls(compactMessageContentForAPI(req.Messages))
 	}
 	log.Printf("LLM Request: URL=%s, Model=%s, Provider=%T, stream=%v, APIKey present=%v",
 		c.apiURL, c.model, c.provider, stream, c.apiKey != "")
@@ -832,7 +857,7 @@ func (c *Client) appendLLMLog(req ChatRequest, tools []Tool, toolChoice string, 
 	}
 
 	entry := map[string]interface{}{
-		"timestamp":      time.Now().Format(time.RFC3339),
+		"timestamp":      clock.RFC3339(),
 		"kind":           "chat_round",
 		"url":            c.apiURL,
 		"model":          c.model,

@@ -9,6 +9,14 @@ import (
 )
 
 func filterUpdates(updates []DocUpdate) []DocUpdate {
+	return filterUpdatesWithLimit(updates, maxUpdatesPerCycle)
+}
+
+func filterUpdatesCrystallize(updates []DocUpdate) []DocUpdate {
+	return filterUpdatesWithLimit(updates, maxCrystallizeUpdatesPerCycle)
+}
+
+func filterUpdatesWithLimit(updates []DocUpdate, limit int) []DocUpdate {
 	var out []DocUpdate
 	for _, u := range updates {
 		content := strings.TrimSpace(u.Content)
@@ -17,6 +25,9 @@ func filterUpdates(updates []DocUpdate) []DocUpdate {
 		}
 		rel := strings.TrimPrefix(strings.TrimSpace(u.Path), "brain/")
 		rel = filepath.ToSlash(filepath.Clean(rel))
+		if err := brain.RejectCapabilitiesPatch(rel, u.Mode, content); err != nil {
+			continue
+		}
 		if strings.Contains(rel, brain.DirModes+"/") {
 			if strings.HasSuffix(rel, "/"+brain.FilePersona) || strings.HasSuffix(rel, "/"+brain.FileBehavior) {
 				// allow append to persona/behavior
@@ -34,8 +45,8 @@ func filterUpdates(updates []DocUpdate) []DocUpdate {
 		}
 		out = append(out, u)
 	}
-	if len(out) > maxUpdatesPerCycle {
-		out = out[:maxUpdatesPerCycle]
+	if len(out) > limit {
+		out = out[:limit]
 	}
 	return out
 }

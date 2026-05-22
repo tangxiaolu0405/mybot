@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mybot/internal/config"
 )
 
 const (
@@ -68,14 +67,10 @@ func loadSkillMarkdown(name string) (body, from string, err error) {
 
 func skillSearchPaths(name string) []string {
 	var paths []string
-	home := CataHome()
-	paths = append(paths, filepath.Join(home, "skills", name, skillFileName))
-	if root := config.FindProjectRoot(); root != "" {
-		paths = append(paths, filepath.Join(root, "skills", name, skillFileName))
+	if w := Active(); w != nil {
+		paths = append(paths, w.SkillMarkdownPath(name))
 	}
-	if base := config.GetBrainBaseDir(); base != "" {
-		paths = append(paths, filepath.Join(base, "skills", name, skillFileName))
-	}
+	paths = append(paths, GlobalSkillMarkdownPath(name))
 	if h, e := os.UserHomeDir(); e == nil && h != "" {
 		paths = append(paths, filepath.Join(h, ".cursor", "skills-cursor", name, skillFileName))
 	}
