@@ -65,8 +65,8 @@ func TerminalBrainSystemExtension(maxPerFile, maxTotal int) string {
 	} else {
 		// legacy fallback
 		for _, rel := range []struct{ title, rel string }{
-			{"brain/core.md", RelPathCore},
-			{"brain/workflow.md", RelPathWorkflow},
+			{"brain/constraints.md", RelPathConstraints},
+			{"brain/behavior.md", RelPathBehavior},
 			{"brain/hot.md", RelPathHot},
 		} {
 			p := filepathJoinBrain(rel.rel)

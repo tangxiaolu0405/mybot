@@ -15,7 +15,7 @@ func TestNormalizeWorkspaceRel_skills(t *testing.T) {
 		{"skills/foo/manifest.yaml", true},
 		{"skills/foo/script.py", true},
 		{"skills/foo/evil.exe", false},
-		{"modes/_default/capabilities.yaml", false},
+		{"modes/_default/capabilities.yaml", true},
 	}
 	for _, c := range cases {
 		_, err := normalizeWorkspaceRel(c.path)

@@ -8,22 +8,23 @@ import (
 	"mybot/internal/config"
 )
 
-// 仓库模板 brain/ 内相对路径（种子来源）。
+// 仓库模板 brain/ 内相对路径（种子来源，与 ~/.cata/global/ 名称一致）。
 const (
-	RelPathBootLeader = "boot-leader.md"
-	RelPathCore       = "core.md"
-	RelPathWorkflow   = "workflow.md"
-	RelPathHot        = "hot.md"
-	RelPathMemoryIndex = "memory_index.json"
-	RelPathEvolutionLog = "evolution_log.json"
-	RelPathTaskQueue = "task_queue.json"
-	RelPathCapabilities = "capabilities.json"
-	RelPathArchive = "archive"
-	RelPathShortTermCurrent = "memory/short-term/current_session.md"
-	RelPathLongTerm = "memory/long-term"
-	RelPathHeartbeatState = "memory/short-term/heartbeat-state.json"
+	RelPathBootAssembler = "boot-assembler.md"
+	RelPathConstraints   = "constraints.md"
+	RelPathBehavior      = "behavior.md"
+
+	RelPathMemoryIndex   = "memory_index.json"
+	RelPathEvolutionLog  = "evolution_log.json"
+)
+
+// legacy paths kept for migration / backward-compatible fallbacks
+const (
+	RelPathHot        = "hot.md"                              // migrated → modes/_default/persona.md
+	RelPathShortTermCurrent = "memory/short-term/current_session.md" // migrated → memory/short/current.md
+	RelPathLongTerm   = "memory/long-term"                    // migrated → memory/long/
+	RelPathArchive    = "archive"                             // migrated → memory/archive/
 	RelPathLearnSystemPrompt = "context/learn_system_prompt.md"
-	RelPathTodo = "todo.md"
 )
 
 // Dir 返回 brain 根（~/.cata/brain），兼容旧代码。
@@ -50,7 +51,7 @@ func BootLeaderPath() string {
 	if _, err := os.Stat(p); err == nil {
 		return p
 	}
-	return filepath.Join(brainRoot(), RelPathBootLeader)
+	return filepath.Join(brainRoot(), RelPathBootAssembler)
 }
 
 // HotPath 当前 workspace 活跃 mode 的 persona。

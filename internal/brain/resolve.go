@@ -1,12 +1,11 @@
 package brain
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"mybot/internal/clock"
 	"mybot/internal/config"
@@ -97,9 +96,56 @@ func syncOutputDir(outputCwd string) {
 	config.BrainBaseDir = outputCwd
 }
 
+// workspaceID 从 root 路径生成可读标识（参考 Claude 的 ~/.claude/projects/<id> 命名）。
+// Windows: D--project-mybot
+// Unix:    home-user-project
 func workspaceID(root string) string {
-	h := sha256.Sum256([]byte(filepath.Clean(root)))
-	return "ws_" + hex.EncodeToString(h[:6])
+	root = filepath.Clean(root)
+	vol := filepath.VolumeName(root)
+	rest := root
+	if vol != "" {
+		rest = root[len(vol):]
+	}
+	rest = strings.Trim(rest, "/\\")
+
+	var parts []string
+	if vol != "" {
+		vol = strings.TrimRight(vol, ":")
+		parts = append(parts, vol)
+	}
+	if rest != "" {
+		seg := strings.ReplaceAll(rest, "/", "-")
+		seg = strings.ReplaceAll(seg, "\\", "-")
+		parts = append(parts, seg)
+	}
+	if len(parts) == 0 {
+		return "root"
+	}
+
+	sep := "--"
+	if vol == "" {
+		sep = "-"
+	}
+	raw := parts[0]
+	if len(parts) > 1 {
+		raw += sep + parts[1]
+	}
+
+	raw = strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+			return r
+		}
+		return '-'
+	}, raw)
+	for strings.Contains(raw, "--") {
+		raw = strings.ReplaceAll(raw, "--", "-")
+	}
+	raw = strings.ToLower(raw)
+	raw = strings.Trim(raw, "-")
+	if raw == "" {
+		return "root"
+	}
+	return raw
 }
 
 func resolveFocusPath(cwd string) (focus string, kind WorkspaceKind, err error) {

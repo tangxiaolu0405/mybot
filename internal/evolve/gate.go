@@ -14,10 +14,10 @@ func shouldInvokeLLM(snap *Snapshot, cooldownUntil time.Time, lastFingerprint st
 	}
 	fp := snap.Fingerprint()
 	if fp != "" && fp == lastFingerprint {
-		return false, "inputs unchanged since last cycle (short/archive/long)"
+		return false, "inputs unchanged since last cycle (short/long)"
 	}
 	if len(snap.Triggers) == 0 {
-		return false, "no triggers (need short-term activity or large archive)"
+		return false, "no triggers (need short-term activity or large long-term)"
 	}
 	return true, strings.Join(snap.Triggers, ", ")
 }
@@ -39,7 +39,7 @@ func computeTriggers(s *Snapshot) {
 		}
 	}
 
-	if s.ArchiveFileCount >= archiveSummarizeMinFiles {
-		s.Triggers = append(s.Triggers, fmt.Sprintf("archive>=%d", archiveSummarizeMinFiles))
+	if s.LongTermFileCount >= longTermSummarizeMinFiles {
+		s.Triggers = append(s.Triggers, fmt.Sprintf("long_term>=%d", longTermSummarizeMinFiles))
 	}
 }

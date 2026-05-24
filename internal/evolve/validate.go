@@ -43,6 +43,11 @@ func filterUpdatesWithLimit(updates []DocUpdate, limit int) []DocUpdate {
 			utf8.RuneCountInString(content) > 2000 {
 			continue
 		}
+		if rel == brain.RelMetaJSON &&
+			(strings.EqualFold(u.Mode, "write") || strings.EqualFold(u.Mode, "overwrite")) &&
+			utf8.RuneCountInString(content) > 2000 {
+			continue
+		}
 		out = append(out, u)
 	}
 	if len(out) > limit {

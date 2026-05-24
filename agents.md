@@ -51,7 +51,7 @@
 | mode `hot.md` 等 | **仅** `internal/evolve` 从 short-term 提炼 |
 | `long-term/`、`archive/` | evolve |
 
-详见 **`brain/core.md` §记忆分层**。
+详见 **`brain/constraints.md` §记忆分层**。
 
 ## 自主演进（摘要）
 
@@ -189,6 +189,6 @@ cata chat --show-thinking  # 输出 reasoning/thinking 内容到 stderr
 ## 建议阅读顺序
 
 1. 本文件  
-2. `~/.cata/brain/core.md`（或仓库模板 `brain/core.md`）  
-3. `brain/workflow.md`  
+2. `~/.cata/global/constraints.md`（或仓库模板 `brain/constraints.md`）  
+3. `brain/behavior.md`  
 4. 具体 `internal/server`、`internal/evolve` 源码  

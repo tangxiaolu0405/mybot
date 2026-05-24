@@ -17,12 +17,12 @@ import (
 )
 
 type req struct {
-	Command   string `json:"command"`
-	Text      string `json:"text,omitempty"`
-	Stream    bool   `json:"stream,omitempty"`
-	ConfirmID string `json:"confirm_id,omitempty"`
-	Approved  bool   `json:"approved,omitempty"`
-	Cwd       string `json:"cwd,omitempty"`
+	Command   string            `json:"command"`
+	Text      string            `json:"text,omitempty"`
+	Stream    bool              `json:"stream,omitempty"`
+	ConfirmID string            `json:"confirm_id,omitempty"`
+	Approved  bool              `json:"approved,omitempty"`
+	Cwd       string            `json:"cwd,omitempty"`
 	Runtime   *brain.RuntimeEnv `json:"runtime,omitempty"`
 }
 
@@ -111,16 +111,17 @@ func RunChat() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
-	fmt.Println("cata — /clear reset history, /exit quit, \"\"\" … \"\"\" for multiline")
+	welcome()
 
 	sc := bufio.NewScanner(os.Stdin)
 	for {
 		select {
 		case <-sigCh:
+			meta("\n")
 			return
 		default:
 		}
-		fmt.Print("› ")
+		fmt.Print(ansiBold + "› " + ansiReset)
 		if !sc.Scan() {
 			break
 		}
@@ -134,39 +135,39 @@ func RunChat() {
 			cmd := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(line), "/"))
 			switch cmd {
 			case "exit", "quit", "q":
-				return // 断开连接；managed server 在最后一个客户端退出后自动停止
+				return
 			case "clear", "reset":
 				r, err := s.call(req{Command: "chat_reset"})
 				if err != nil {
-					fmt.Fprintln(os.Stderr, err)
+					errorMsg(err.Error())
 					continue
 				}
 				if !r.Success {
-					fmt.Fprintln(os.Stderr, r.Message)
+					errorMsg(r.Message)
 					continue
 				}
-				fmt.Println(r.Message)
+				progressMsg(r.Message)
 			default:
-				fmt.Fprintf(os.Stderr, "unknown: /%s (try /clear, /exit)\n", cmd)
+				meta("  %sunknown:%s /%s (try /clear, /exit)\n", ansiDim, ansiReset, cmd)
 			}
 			continue
 		}
 
 		outCwd, _ := os.Getwd()
 		if err := s.write(req{Command: "chat", Text: line, Stream: true, Cwd: outCwd, Runtime: CollectRuntimeEnv()}); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			errorMsg(err.Error())
 			continue
 		}
 		if err := s.drainStream(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			errorMsg(err.Error())
 			if connLost(err) {
-				fmt.Fprintln(os.Stderr, "提示: 与 cata server 的连接已断开。请直接再发一条消息（将自动重连 server），勿在 › 下输入 1 确认命令。")
+				meta("  %s提示:%s 连接断开。直接发送下一条消息自动重连。\n", ansiDim, ansiReset)
 				_ = s.conn.Close()
 				_ = EnsureServer()
 				if ns, derr := dial(); derr == nil {
 					s.conn = ns.conn
 					s.br = ns.br
-					fmt.Fprintln(os.Stderr, "# 已重新连接 cata server")
+					progressMsg("已重新连接 cata server")
 				}
 			}
 		}
@@ -192,6 +193,7 @@ func readInput(sc *bufio.Scanner, first string) string {
 }
 
 func (s *session) drainStream() error {
+	firstToken := true
 	for {
 		line, err := s.readLine()
 		if err != nil {
@@ -206,72 +208,140 @@ func (s *session) drainStream() error {
 		}
 		switch ev["type"] {
 		case "token":
-			if c, _ := ev["content"].(string); c != "" {
-				fmt.Print(c)
+			c, _ := ev["content"].(string)
+			if c == "" {
+				continue
 			}
+			if firstToken {
+				firstToken = false
+				outToken("\n")
+			}
+			outToken(c)
+
+		case "thinking":
+			c, _ := ev["content"].(string)
+			if c != "" {
+				meta("  %s…%s %s%s%s\n", ansiDim, ansiReset, ansiDim, truncate(c, 120), ansiReset)
+			}
+
 		case "progress":
-			if m, _ := ev["message"].(string); m != "" {
-				fmt.Fprintf(os.Stderr, "# %s\n", m)
+			m, _ := ev["message"].(string)
+			if m != "" {
+				progressMsg(m)
 			}
+
 		case "tool_start":
-			if n, _ := ev["name"].(string); n != "" && n != "run_command" {
-				fmt.Fprintf(os.Stderr, "▶ %s\n", n)
+			name, _ := ev["name"].(string)
+			display, _ := ev["display"].(string)
+			if name != "" {
+				toolStart(name, display)
 			}
+
 		case "tool_result":
 			out, _ := ev["output"].(string)
 			name, _ := ev["name"].(string)
+			display, _ := ev["display"].(string)
 			if name == "run_command" {
-				printExecBlock(s.lastExecCmd, s.lastExecCwd, out)
+				runCmdResult(s.lastExecCmd, s.lastExecCwd, out)
 			} else if out != "" {
-				fmt.Fprintf(os.Stderr, "── %s ──\n%s\n", name, truncate(out, 4000))
+				toolOutput(name, out, display)
 			}
-		case "file":
-			fmt.Fprintf(os.Stderr, "── %v ──\n%v\n", ev["path"], ev["content"])
+
 		case "file_written":
-			fmt.Fprintf(os.Stderr, "── wrote %v (%v bytes) ──\n", ev["path"], ev["bytes"])
+			path, _ := ev["path"].(string)
+			bytes, _ := ev["bytes"].(float64)
+			fileWritten(path, int(bytes))
+
+		case "diff":
+			c, _ := ev["content"].(string)
+			if c != "" {
+				diffLine(c)
+			}
+
 		case "exec_confirm_required":
-			s.lastExecCmd = execLine(ev)
-			s.lastExecCwd, _ = ev["cwd"].(string)
-			if err := s.confirmExec(ev); err != nil {
+			id, _ := ev["confirm_id"].(string)
+			cmd := execLine(ev)
+			cwd, _ := ev["cwd"].(string)
+			s.lastExecCmd = cmd
+			s.lastExecCwd = cwd
+			approved, err := confirmPrompt(id, cmd, cwd)
+			if err != nil {
 				return err
 			}
+			if err := s.write(req{Command: "exec_confirm", ConfirmID: id, Approved: approved}); err != nil {
+				return err
+			}
+			if !approved {
+				execDenied()
+			}
+
 		case "exec_denied":
-			fmt.Fprintln(os.Stderr, "── command cancelled ──")
+			execDenied()
+
 		case "exec_done":
 			s.lastExecCmd = execLine(ev)
 			if cwd, ok := ev["cwd"].(string); ok {
 				s.lastExecCwd = cwd
 			}
+			exitCode := 0
+			if ec, ok := ev["exit_code"].(float64); ok {
+				exitCode = int(ec)
+			}
+			timedOut, _ := ev["timed_out"].(bool)
+			execDone(s.lastExecCmd, exitCode, timedOut)
+
 		case "error":
-			fmt.Fprintf(os.Stderr, "error: %v\n", ev["message"])
+			m, _ := ev["message"].(string)
+			errorMsg(m)
+
+		case "user_choice":
+			id, _ := ev["id"].(string)
+			prompt, _ := ev["prompt"].(string)
+			detail, _ := ev["detail"].(string)
+			multi, _ := ev["multi"].(bool)
+			rawOpts, _ := ev["options"].([]any)
+			var opts []SelectOption
+			for _, r := range rawOpts {
+				if m, ok := r.(map[string]any); ok {
+					opts = append(opts, SelectOption{
+						ID:    str(m["id"]),
+						Label: str(m["label"]),
+						Desc:  str(m["desc"]),
+					})
+				}
+			}
+			if id == "" || len(opts) < 2 {
+				errorMsg("invalid user_choice event")
+				continue
+			}
+			var selected []string
+			if multi {
+				selected, _ = SelectMulti(prompt, detail, opts)
+			} else {
+				single, _ := Select(prompt, detail, opts)
+				if single != "" {
+					selected = []string{single}
+				}
+			}
+			// Send response directly (not via s.write which wraps in req struct)
+			type choiceResp struct {
+				Command  string   `json:"command"`
+				ChoiceID string   `json:"choice_id"`
+				Selected []string `json:"selected"`
+			}
+			b, _ := json.Marshal(choiceResp{Command: "user_choice", ChoiceID: id, Selected: selected})
+			s.conn.Write(append(b, '\n'))
+
 		case "done":
-			fmt.Println()
-			if ok, _ := ev["success"].(bool); !ok {
+			firstToken = true
+			success, _ := ev["success"].(bool)
+			if !success {
 				return fmt.Errorf("chat failed")
 			}
+			outToken("\n")
 			return nil
 		}
 	}
-}
-
-func (s *session) confirmExec(ev map[string]any) error {
-	id, _ := ev["confirm_id"].(string)
-	if id == "" {
-		return fmt.Errorf("missing confirm_id")
-	}
-	cmd, cwd := execLine(ev), ""
-	if c, ok := ev["cwd"].(string); ok {
-		cwd = c
-	}
-	fmt.Fprintf(os.Stderr, "\nrun?  $ %s\n", cmd)
-	if cwd != "" {
-		fmt.Fprintf(os.Stderr, "cwd: %s\n", cwd)
-	}
-	fmt.Fprint(os.Stderr, "[1] run  [2] cancel › ")
-	var choice string
-	fmt.Scanln(&choice)
-	approved := strings.TrimSpace(choice) == "1"
-	return s.write(req{Command: "exec_confirm", ConfirmID: id, Approved: approved})
 }
 
 func execLine(ev map[string]any) string {
@@ -291,19 +361,6 @@ func execLine(ev map[string]any) string {
 	return execcmd.FormatLine(parts)
 }
 
-func printExecBlock(cmd, cwd, output string) {
-	fmt.Fprintln(os.Stderr, "\n── command output ──")
-	if cmd != "" {
-		fmt.Fprintf(os.Stderr, "  $ %s\n", cmd)
-	}
-	if cwd != "" {
-		fmt.Fprintf(os.Stderr, "  cwd: %s\n", cwd)
-	}
-	if strings.TrimSpace(output) != "" {
-		fmt.Fprintf(os.Stderr, "\n%s\n", strings.TrimRight(output, "\n"))
-	}
-}
-
 func connLost(err error) bool {
 	if err == nil {
 		return false
@@ -319,5 +376,10 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "\n…"
+	return s[:n] + "…"
+}
+
+func str(v any) string {
+	s, _ := v.(string)
+	return s
 }

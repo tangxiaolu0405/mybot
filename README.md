@@ -58,8 +58,9 @@ cata chat ──Unix Socket──▶ cata run (server) ──HTTP──▶ LLM (
 
 - `agents.md` — 项目边界与 AI 约束
 - `design.md` — 完整系统设计（架构、交互层、产出区、记忆分层）
-- `brain/core.md` — 脑子模板
-- `brain/workflow.md` — 演进工作流
+- `brain/constraints.md` — 行为宪法（种子 → `global/constraints.md`）
+- `brain/behavior.md` — 演进 SOP（种子 → `global/behavior.md`）
+- `brain/boot-assembler.md` — 运行时引导（种子 → `global/boot-assembler.md`）
 
 ## 依赖
 

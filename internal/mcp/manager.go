@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,9 @@ type Manager struct {
 	llmTools  []llm.Tool
 	timeout   time.Duration
 	maxOutput int
+
+	// server configs for reconnect
+	serverCfgs map[string]config.MCPServerEntry
 }
 
 var (
@@ -47,14 +51,18 @@ const maxExportedMCPTools = 14
 // Init 按配置与 capabilities 启动 MCP；失败的服务器仅记日志。
 func Init(cfg config.MCPConfig, caps brain.Capabilities) *Manager {
 	mgr := &Manager{
-		clients:   make(map[string]*stdioClient),
-		routes:    make(map[string]*toolRoute),
-		timeout:   time.Duration(cfg.ToolTimeoutSeconds) * time.Second,
-		maxOutput: cfg.MaxOutputBytes,
+		clients:    make(map[string]*stdioClient),
+		routes:     make(map[string]*toolRoute),
+		serverCfgs: make(map[string]config.MCPServerEntry),
+		timeout:    time.Duration(cfg.ToolTimeoutSeconds) * time.Second,
+		maxOutput:  cfg.MaxOutputBytes,
 	}
 	if !cfg.Enabled {
 		global = mgr
 		return mgr
+	}
+	for _, s := range cfg.Servers {
+		mgr.serverCfgs[s.Name] = s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -204,6 +212,7 @@ func (mgr *Manager) Tools() []llm.Tool {
 }
 
 // TryCall 若 name 为 MCP 工具则执行并返回 ok=true。
+// 永远不向调用者返回 Go error — 浏览器错误作为文本输出，让 LLM 可见。
 func (mgr *Manager) TryCall(ctx context.Context, name, argsJSON string) (out string, err error, ok bool) {
 	if mgr == nil {
 		return "", nil, false
@@ -230,11 +239,76 @@ func (mgr *Manager) TryCall(ctx context.Context, name, argsJSON string) (out str
 		callCtx, cancel = context.WithTimeout(ctx, mgr.timeout)
 		defer cancel()
 	}
-	text, err := client.callTool(callCtx, route.toolName, args)
+	text, callErr := client.callTool(callCtx, route.toolName, args)
+
+	// Retry once on transient errors: reconnect browser and try again.
+	if callErr != nil && isTransientMCPError(callErr) {
+		log.Printf("MCP transient error on %s/%s: %v — reconnecting browser", route.serverName, route.toolName, callErr)
+		if newClient, reconnErr := mgr.reconnectServer(callCtx, route.serverName, client); reconnErr == nil {
+			text, callErr = newClient.callTool(callCtx, route.toolName, args)
+		} else {
+			log.Printf("MCP reconnect failed: %v", reconnErr)
+		}
+	}
+
+	// Always return content as text — never lose the actual error to Go error.
+	// The caller (runTerminalTool) replaces content with "error: <go err>" when err != nil.
+	if callErr != nil && text == "" {
+		text = "[browser error] " + callErr.Error()
+	}
 	if mgr.maxOutput > 0 && len(text) > mgr.maxOutput {
 		text = text[:mgr.maxOutput] + "\n…(truncated)"
 	}
-	return text, err, true
+	return text, nil, true
+}
+
+// reconnectServer closes the old client and starts a new one for the same server name.
+func (mgr *Manager) reconnectServer(ctx context.Context, name string, old *stdioClient) (*stdioClient, error) {
+	_ = old.Close()
+
+	mgr.mu.RLock()
+	cfg, ok := mgr.serverCfgs[name]
+	mgr.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("no config for server %q", name)
+	}
+
+	c, err := startStdioClient(ctx, cfg.Name, cfg.Command, cfg.Args, cfg.Env)
+	if err != nil {
+		return nil, err
+	}
+	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if _, err := c.listTools(listCtx); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+
+	mgr.mu.Lock()
+	mgr.clients[name] = c
+	mgr.mu.Unlock()
+
+	log.Printf("MCP server %q reconnected", name)
+	return c, nil
+}
+
+// isTransientMCPError returns true for errors that can be recovered by reconnecting.
+func isTransientMCPError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "eof") ||
+		strings.Contains(msg, "process already finished") ||
+		strings.Contains(msg, "os: process already finished") ||
+		os.IsTimeout(err)
+}
+
+// IsBrowserTool reports whether name is an MCP browser tool.
+func IsBrowserTool(name string) bool {
+	return strings.HasPrefix(name, "browser_")
 }
 
 // Shutdown 关闭所有 MCP 子进程。

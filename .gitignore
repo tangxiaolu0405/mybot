@@ -1,0 +1,7 @@
+# Dot-prefixed directories and files (config, cache, project metadata)
+.*
+!/.gitignore
+!.gitattributes
+
+# Build artifacts
+cata.exe

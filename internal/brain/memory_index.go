@@ -110,7 +110,7 @@ func SyncMemoryIndexAfterEvolution(touched []string, learning, archivedRel strin
 
 	for _, rel := range touched {
 		rel = filepath.ToSlash(strings.TrimSpace(rel))
-		if rel == "" || seen[rel] {
+		if rel == "" || seen[rel] || strings.HasPrefix(rel, RelMemoryArchive+"/") {
 			continue
 		}
 		seen[rel] = true
@@ -280,8 +280,6 @@ func inferIndexCategory(rel string) (category string, priority int, disclosure s
 		return "episodic", 4, "index"
 	case strings.HasPrefix(rel, RelMemoryLong+"/"):
 		return "fact", 5, "index"
-	case strings.HasPrefix(rel, RelMemoryArchive+"/"):
-		return "episodic", 3, "index"
 	case strings.Contains(rel, "/behavior.md"):
 		return "procedure", 6, "index"
 	default:

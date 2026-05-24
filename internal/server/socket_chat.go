@@ -185,12 +185,27 @@ func (ss *SocketServer) handleTerminalChatStream(conn net.Conn, history *[]llm.M
 			ToolCalls:        toolCalls,
 		})
 
+		fatalBrowser := false
 		for _, tc := range toolCalls {
 			name := tc.Function.Name
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "tool_start", "id": tc.ID, "name": name})
-			out, terr := ss.runTerminalTool(ctx, conn, tc)
+			var out string
+			var terr error
+			if fatalBrowser && mcp.IsBrowserTool(name) {
+				out = "[browser error] skipped: browser crashed (see previous error)"
+			} else {
+				out, terr = ss.runTerminalTool(ctx, conn, tc)
+			}
 			if terr != nil {
-				out = fmt.Sprintf("error: %v", terr)
+				if out != "" {
+					out = out + "\n[error] " + terr.Error()
+				} else {
+					out = "[error] " + terr.Error()
+				}
+			}
+
+			if !fatalBrowser && isFatalBrowserError(terr, out) {
+				fatalBrowser = true
 			}
 			_ = ss.emitStreamLine(conn, map[string]interface{}{"type": "tool_result", "id": tc.ID, "name": name, "output": out})
 			*history = append(*history, llm.Message{
@@ -276,6 +291,15 @@ func (ss *SocketServer) buildTerminalChatTools() []llm.Tool {
 			Parameters:  runSkillParams,
 		},
 	})
+	askUserParams := json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string","description":"Question to present to the user"},"options":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"label":{"type":"string"},"desc":{"type":"string"}},"required":["id","label"]},"minItems":2},"multi":{"type":"boolean","description":"Allow user to select multiple options (default false)"}},"required":["prompt","options"]}`)
+	out = append(out, llm.Tool{
+		Type: "function",
+		Function: llm.ToolFunction{
+			Name:        "ask_user",
+			Description: "Present a choice to the user. Use when you need the user to decide between approaches, pick from alternatives, or confirm a multi-option selection. The user sees an interactive selector (arrow keys, Enter to confirm).",
+			Parameters:  askUserParams,
+		},
+	})
 	return out
 }
 
@@ -338,43 +362,71 @@ func (ss *SocketServer) runTerminalTool(ctx context.Context, conn net.Conn, tc l
 					"type": "exec_denied", "confirm_id": id,
 					"command_line": cmdLine, "cwd": wd,
 				})
-				return "execution cancelled by user", nil
+				return "[run_command] cancelled by user", nil
 			}
 		}
+
 		to := time.Duration(ec.TimeoutSeconds) * time.Second
 		if to <= 0 {
 			to = 120 * time.Second
 		}
 		xctx, cancel := context.WithTimeout(ctx, to)
 		defer cancel()
+
 		cmd := exec.CommandContext(xctx, p.Argv[0], p.Argv[1:]...)
 		cmd.Dir = wd
-		outb, err := cmd.CombinedOutput()
+
+		var stdOut, stdErr bytes.Buffer
+		cmd.Stdout = &stdOut
+		cmd.Stderr = &stdErr
+		runErr := cmd.Run()
+
 		maxB := ec.MaxOutputBytes
 		if maxB <= 0 {
 			maxB = 256 * 1024
 		}
-		trunc := false
-		if len(outb) > maxB {
-			outb = outb[:maxB]
-			trunc = true
+
+		exitCode := 0
+		timedOut := false
+		var exitErr *exec.ExitError
+		if runErr != nil {
+			if errors.Is(xctx.Err(), context.DeadlineExceeded) {
+				timedOut = true
+				exitCode = -1
+			} else if errors.As(runErr, &exitErr) {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = -1
+			}
 		}
-		text := string(outb)
-		if trunc {
-			text += "\n…(truncated)"
+
+		stdoutStr := stdOut.String()
+		stderrStr := stdErr.String()
+		totalLen := len(stdoutStr) + len(stderrStr)
+		truncated := false
+		if totalLen > maxB {
+			stdoutStr, stderrStr = truncateCmdOutput(stdoutStr, stderrStr, maxB)
+			truncated = true
 		}
-		if err != nil {
-			log.Printf("run_command err: argv=%v cwd=%s: %v", p.Argv, wd, err)
-		} else {
-			log.Printf("run_command ok: argv=%v cwd=%s bytes=%d", p.Argv, wd, len(outb))
-		}
+
+		result := formatCommandResult(wd, cmdLine, exitCode, timedOut, truncated, stdoutStr, stderrStr)
+
 		_ = ss.emitStreamLine(conn, map[string]interface{}{
-			"type": "exec_done", "argv": p.Argv, "command_line": cmdLine, "cwd": wd, "error": err != nil,
+			"type":         "exec_done",
+			"argv":         p.Argv,
+			"command_line": cmdLine,
+			"cwd":          wd,
+			"exit_code":    exitCode,
+			"timed_out":    timedOut,
+			"truncated":    truncated,
 		})
-		if err != nil {
-			return text, err
+
+		if runErr != nil && !timedOut && exitCode < 0 {
+			log.Printf("run_command failed: argv=%v cwd=%s: %v", p.Argv, wd, runErr)
+		} else {
+			log.Printf("run_command: exit=%d argv=%v cwd=%s bytes=%d", exitCode, p.Argv, wd, totalLen)
 		}
-		return text, nil
+		return result, nil
 
 	case "read_file":
 		return toolReadFile(argsJSON)
@@ -390,9 +442,140 @@ func (ss *SocketServer) runTerminalTool(ctx context.Context, conn net.Conn, tc l
 		}
 		return brain.RunSkill(ctx, p)
 
+	case "ask_user":
+		var p struct {
+			Prompt  string `json:"prompt"`
+			Options []struct {
+				ID    string `json:"id"`
+				Label string `json:"label"`
+				Desc  string `json:"desc"`
+			} `json:"options"`
+			Multi bool `json:"multi"`
+		}
+		if err := llm.ParseToolArguments(argsJSON, &p); err != nil {
+			return "", fmt.Errorf("ask_user args: %w", err)
+		}
+		if len(p.Options) < 2 {
+			return "", fmt.Errorf("ask_user: at least 2 options required")
+		}
+		choiceID := newExecConfirmID()
+		_ = ss.emitStreamLine(conn, map[string]interface{}{
+			"type":    "user_choice",
+			"id":      choiceID,
+			"prompt":  p.Prompt,
+			"detail":  "",
+			"multi":   p.Multi,
+			"options": p.Options,
+		})
+		selected, err := ss.waitUserChoice(conn, choiceID)
+		if err != nil {
+			return "", err
+		}
+		if len(selected) == 0 {
+			return "[ask_user] user cancelled", nil
+		}
+		var labels []string
+		for _, s := range selected {
+			for _, o := range p.Options {
+				if o.ID == s {
+					labels = append(labels, o.Label)
+					break
+				}
+			}
+		}
+		if len(labels) == 0 {
+			labels = selected
+		}
+		if p.Multi {
+			return fmt.Sprintf("[ask_user] user selected: %s", strings.Join(labels, ", ")), nil
+		}
+		return fmt.Sprintf("[ask_user] user selected: %s", labels[0]), nil
+
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
+}
+
+// formatCommandResult builds a structured string for the LLM from command execution results.
+// Always includes cwd, command, and exit code. Includes stdout/stderr separated when relevant.
+func formatCommandResult(wd, cmdLine string, exitCode int, timedOut, truncated bool, stdoutStr, stderrStr string) string {
+	var b strings.Builder
+	b.WriteString("[run_command]\n")
+	b.WriteString("cwd: ")
+	b.WriteString(wd)
+	b.WriteString("\n$ ")
+	b.WriteString(cmdLine)
+
+	if timedOut {
+		b.WriteString("\nexit: timeout")
+	} else {
+		b.WriteString(fmt.Sprintf("\nexit: %d", exitCode))
+	}
+	if truncated {
+		b.WriteString(" (output truncated)")
+	}
+	b.WriteString("\n")
+
+	hasOut := len(strings.TrimSpace(stdoutStr)) > 0
+	hasErr := len(strings.TrimSpace(stderrStr)) > 0
+
+	if hasOut && hasErr {
+		b.WriteString("--- stdout ---\n")
+		b.WriteString(stdoutStr)
+		if !strings.HasSuffix(stdoutStr, "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("--- stderr ---\n")
+		b.WriteString(stderrStr)
+	} else if hasErr {
+		b.WriteString("--- stderr ---\n")
+		b.WriteString(stderrStr)
+	} else if hasOut {
+		b.WriteString(stdoutStr)
+	}
+	return b.String()
+}
+
+// truncateCmdOutput keeps the head and tail of combined stdout+stderr when total exceeds maxBytes.
+// Preserves roughly headRatio of output from the start and (1-headRatio) from the end.
+func truncateCmdOutput(stdoutStr, stderrStr string, maxBytes int) (string, string) {
+	const headRatio = 0.25
+	headBudget := int(float64(maxBytes) * headRatio)
+	tailBudget := maxBytes - headBudget - 200 // reserve 200 bytes for the truncation notice
+
+	total := stdoutStr + stderrStr
+	if len(total) <= maxBytes {
+		return stdoutStr, stderrStr
+	}
+
+	// Build combined truncated output
+	notice := fmt.Sprintf("\n... (truncated %d bytes) ...\n", len(total)-maxBytes)
+
+	// Take head from beginning, tail from end
+	head := safeSlice(total, 0, headBudget)
+	tail := safeSlice(total, len(total)-tailBudget, len(total))
+
+	return "", head + notice + tail
+}
+
+func safeSlice(s string, start, end int) string {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(s) {
+		end = len(s)
+	}
+	if start >= end {
+		return ""
+	}
+	// Try not to break UTF-8; walk back to a valid boundary
+	for start > 0 && start < len(s) && s[start]&0xC0 == 0x80 {
+		start--
+	}
+	for end > start && end < len(s) && s[end]&0xC0 == 0x80 {
+		end--
+	}
+	return s[start:end]
 }
 
 // safePathUnder 将 rel 限制在 base 目录之下（base 须已为绝对路径或经 Abs 处理）。
@@ -490,3 +673,63 @@ func resolveExecCwd() (string, error) {
 	return d, nil
 }
 
+// waitUserChoice blocks on the same chat connection waiting for a user_choice response.
+func (ss *SocketServer) waitUserChoice(conn net.Conn, choiceID string) ([]string, error) {
+	deadline := time.Now().Add(execConfirmWaitTimeout)
+	br := bufio.NewReader(conn)
+	for {
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("user choice timed out")
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		line, err := br.ReadBytes('\n')
+		if err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				continue
+			}
+			return nil, fmt.Errorf("read user_choice: %w", err)
+		}
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var req struct {
+			Command  string   `json:"command"`
+			ChoiceID string   `json:"choice_id"`
+			Selected []string `json:"selected"`
+		}
+		if err := json.Unmarshal(line, &req); err != nil {
+			return nil, fmt.Errorf("invalid user_choice JSON: %w", err)
+		}
+		if req.Command != "user_choice" {
+			return nil, fmt.Errorf("expected user_choice, got %q", req.Command)
+		}
+		if req.ChoiceID != choiceID {
+			return nil, fmt.Errorf("choice_id mismatch")
+		}
+		_ = conn.SetReadDeadline(time.Time{})
+		return req.Selected, nil
+	}
+}
+
+// isFatalBrowserError returns true when the tool error or output indicates
+// the browser process died — remaining browser tool calls in this round are futile.
+func isFatalBrowserError(err error, output string) bool {
+	if err == nil && !strings.Contains(output, "[browser error]") {
+		return false
+	}
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "broken pipe") ||
+			strings.Contains(msg, "eof") ||
+			strings.Contains(msg, "process already finished") {
+			return true
+		}
+	}
+	return strings.Contains(output, "[browser error]") &&
+		(strings.Contains(output, "Target closed") ||
+			strings.Contains(output, "Browser closed") ||
+			strings.Contains(output, "Protocol error") ||
+			strings.Contains(output, "has been closed"))
+}

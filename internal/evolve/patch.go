@@ -88,10 +88,14 @@ func normalizeWorkspaceRel(p string) (string, error) {
 		parts := strings.SplitN(rest, "/", 2)
 		if len(parts) == 2 {
 			file := parts[1]
-			if file == brain.FilePersona || file == brain.FileBehavior || file == brain.FileConstraints {
+			if file == brain.FilePersona || file == brain.FileBehavior || file == brain.FileConstraints || file == brain.FileCapabilities {
 				return p, nil
 			}
 		}
+	}
+
+	if p == brain.RelMetaJSON {
+		return p, nil
 	}
 
 	if p == brain.RelShortCurrent || strings.HasPrefix(p, "memory/short/") {

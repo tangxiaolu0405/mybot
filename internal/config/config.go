@@ -239,7 +239,7 @@ func getDefaultConfig() *AppConfig {
 				Name:    "browser",
 				Enabled: true,
 				Command: "npx",
-				Args:    []string{"-y", "@playwright/mcp@latest"},
+				Args:    []string{"-y", "@playwright/mcp@latest", "--console"},
 			}},
 			ToolTimeoutSeconds: 120,
 			MaxOutputBytes:     256 * 1024,
@@ -419,7 +419,7 @@ func normalizeMCPConfig(m *MCPConfig) {
 			Name:    "browser",
 			Enabled: true,
 			Command: "npx",
-			Args:    []string{"-y", "@playwright/mcp@latest"},
+			Args:    []string{"-y", "@playwright/mcp@latest", "--console"},
 		}}
 	}
 }

@@ -7,7 +7,7 @@ const (
 	shortTermTriggerBytes = 4096
 	// shortTermActivityBytes 短期有新增内容（相对上次演进），即可尝试更新 hot
 	shortTermActivityBytes = 512
-	archiveSummarizeMinFiles = 25
+	longTermSummarizeMinFiles = 25 // 触发 summarize：long-term 文件过多时归档到 archive（冷存储）
 	maxShortExcerptBytes    = 2400
 	maxUpdatesPerCycle            = 3
 	maxCrystallizeUpdatesPerCycle = 8

@@ -25,6 +25,9 @@ func EnsureCataLayout() error {
 	if err := seedGlobalFromRepo(); err != nil {
 		return err
 	}
+	if err := MigrateWorkspaceNaming(); err != nil {
+		return fmt.Errorf("migrate workspace naming: %w", err)
+	}
 	return MigrateLegacyBrain()
 }
 
@@ -35,15 +38,12 @@ func seedGlobalFromRepo() error {
 	}
 	src := filepath.Join(repoRoot, "brain")
 	mapping := map[string]string{
-		FileGlobalConstraints: RelPathCore,
-		FileGlobalBehavior:    RelPathWorkflow,
-		FileGlobalBoot:        RelPathBootLeader,
+		FileGlobalConstraints: RelPathConstraints,
+		FileGlobalBehavior:    RelPathBehavior,
+		FileGlobalBoot:        RelPathBootAssembler,
 	}
 	for dstName, srcName := range mapping {
 		dst := filepath.Join(globalDir(), dstName)
-		if _, err := os.Stat(dst); err == nil {
-			continue
-		}
 		data, err := os.ReadFile(filepath.Join(src, srcName))
 		if err != nil {
 			continue

@@ -28,8 +28,8 @@ type Snapshot struct {
 
 // Fingerprint 仅跟踪演进「输入」信号（不含 hot：hot 由演进写出，不应作为触发依据）。
 func (s *Snapshot) Fingerprint() string {
-	return fmt.Sprintf("st:%s|sb:%d|lt:%d|ar:%d",
-		s.ShortTermModTime, s.ShortTermBytes, s.LongTermFileCount, s.ArchiveFileCount)
+	return fmt.Sprintf("st:%s|sb:%d|lt:%d",
+		s.ShortTermModTime, s.ShortTermBytes, s.LongTermFileCount)
 }
 
 // Observe 读取 ~/.cata/brain 元数据（不读 workflow/core 全文）。

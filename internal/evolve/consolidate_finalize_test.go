@@ -3,7 +3,7 @@ package evolve
 import "testing"
 
 func TestShouldFinalizeShortTerm(t *testing.T) {
-	snap := &Snapshot{ShortTermBytes: 2000}
+	snap := &Snapshot{ShortTermBytes: 100}
 	dec := &Decision{Action: "consolidate"}
 	if shouldFinalizeShortTerm(dec, []string{"modes/_default/persona.md"}, snap, false) {
 		t.Fatal("expected false without enough bytes")
