@@ -1,0 +1,85 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            artifact: cata-linux-amd64
+
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            artifact: cata-darwin-amd64
+
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            artifact: cata-darwin-arm64
+
+          - os: windows-latest
+            goos: windows
+            goarch: 386
+            artifact: cata-windows-386
+            ext: .exe
+
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            artifact: cata-windows-amd64
+            ext: .exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -ldflags="-s -w" -o ${{ matrix.artifact }}${{ matrix.ext }} ./cmd/cata
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}${{ matrix.ext }}
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
