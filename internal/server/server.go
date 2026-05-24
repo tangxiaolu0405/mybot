@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"mybot/internal/config"
-	"mybot/internal/evolve"
-	"mybot/internal/mcp"
+	"cata/internal/config"
+	"cata/internal/evolve"
+	"cata/internal/mcp"
 )
 
 // Server 终端 Agent 常驻进程：Unix socket + 流式 LLM 对话 + 可选后台自主演进。

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"os"
 
-	"mybot/internal/brain"
-	"mybot/internal/clock"
+	"cata/internal/brain"
+	"cata/internal/clock"
 )
 
 // EvolutionLog 单 workspace 演进日志。

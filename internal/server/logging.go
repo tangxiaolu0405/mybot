@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"mybot/internal/brain"
+	"cata/internal/brain"
 )
 
 // SetupProcessLogging 将标准 log 写入新 cata-server.log（启动前已归档旧文件）。

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"mybot/internal/brain"
+	"cata/internal/brain"
 )
 
 func filterUpdates(updates []DocUpdate) []DocUpdate {

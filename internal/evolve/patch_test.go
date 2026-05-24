@@ -3,7 +3,7 @@ package evolve
 import (
 	"testing"
 
-	"mybot/internal/brain"
+	"cata/internal/brain"
 )
 
 func TestNormalizeWorkspaceRel_skills(t *testing.T) {

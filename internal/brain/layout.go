@@ -3,7 +3,7 @@ package brain
 import (
 	"path/filepath"
 
-	"mybot/internal/config"
+	"cata/internal/config"
 )
 
 // ~/.cata 目录布局（CATA_HOME）。

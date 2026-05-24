@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mybot/internal/config"
+	"cata/internal/config"
 )
 
 func TestWorkspaceFileTools(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"mybot/internal/config"
+	"cata/internal/config"
 )
 
 // 粗算 token：混合中英文约 3.2 字符/token（无 tiktoken 时的保守估计）。

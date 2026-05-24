@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"mybot/internal/clock"
+	"cata/internal/clock"
 	"unicode/utf8"
 )
 

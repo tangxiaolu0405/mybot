@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"mybot/internal/config"
+	"cata/internal/config"
 )
 
 // 仓库模板 brain/ 内相对路径（种子来源，与 ~/.cata/global/ 名称一致）。

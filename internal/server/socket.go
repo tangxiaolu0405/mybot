@@ -11,10 +11,10 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"mybot/internal/brain"
-	"mybot/internal/client"
-	"mybot/internal/config"
-	"mybot/internal/llm"
+	"cata/internal/brain"
+	"cata/internal/client"
+	"cata/internal/config"
+	"cata/internal/llm"
 )
 
 // SocketServer 处理客户端连接

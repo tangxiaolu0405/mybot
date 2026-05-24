@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"mybot/internal/brain"
+	"cata/internal/brain"
 )
 
 var (

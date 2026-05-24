@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"mybot/internal/brain"
-	"mybot/internal/clock"
+	"cata/internal/brain"
+	"cata/internal/clock"
 )
 
 // Snapshot 自主演进 Observe 阶段的只读状态（仅元数据，不把整库塞进 LLM）。

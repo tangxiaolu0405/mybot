@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mybot/internal/clock"
-	"mybot/internal/config"
+	"cata/internal/clock"
+	"cata/internal/config"
 )
 
 // MigrateLegacyBrain 将旧版扁平 ~/.cata/brain/{hot,core,memory,...} 迁入首个 workspace。

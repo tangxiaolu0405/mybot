@@ -11,9 +11,9 @@ import (
 	"strings"
 	"syscall"
 
-	"mybot/internal/brain"
-	"mybot/internal/config"
-	"mybot/internal/execcmd"
+	"cata/internal/brain"
+	"cata/internal/config"
+	"cata/internal/execcmd"
 )
 
 type req struct {

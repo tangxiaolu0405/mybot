@@ -8,7 +8,7 @@ import (
 	"net"
 	"time"
 
-	"mybot/internal/config"
+	"cata/internal/config"
 )
 
 // PingServer 检测本机 cata.sock 是否已有存活 server。

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mybot/internal/clock"
+	"cata/internal/clock"
 )
 
 // Workspace 脑子的一格分区（~/.cata/brain/workspaces/<id>/），由 focus_path 选中，不是产出区。

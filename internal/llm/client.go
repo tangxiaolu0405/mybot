@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"mybot/internal/brain"
-	"mybot/internal/clock"
-	"mybot/internal/config"
+	"cata/internal/brain"
+	"cata/internal/clock"
+	"cata/internal/config"
 )
 
 const (

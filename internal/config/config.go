@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mybot/internal/clock"
+	"cata/internal/clock"
 )
 
 const (

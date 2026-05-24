@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"mybot/internal/brain"
+	"cata/internal/brain"
 )
 
 const spawnWaitTimeout = 20 * time.Second

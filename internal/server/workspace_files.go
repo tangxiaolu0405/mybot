@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"mybot/internal/config"
-	"mybot/internal/llm"
+	"cata/internal/config"
+	"cata/internal/llm"
 )
 
 func workspaceFileLimits() (maxRead, maxWrite int) {

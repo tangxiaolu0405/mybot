@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"mybot/internal/config"
+	"cata/internal/config"
 )
 
 // EnsureCataLayout 创建 ~/.cata 顶层目录与 global 模板。

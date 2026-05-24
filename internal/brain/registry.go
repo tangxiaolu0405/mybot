@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"mybot/internal/clock"
+	"cata/internal/clock"
 )
 
 // WorkspaceKind 工作区类型。

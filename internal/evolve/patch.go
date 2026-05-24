@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mybot/internal/brain"
-	"mybot/internal/clock"
+	"cata/internal/brain"
+	"cata/internal/clock"
 )
 
 // DocUpdate LLM 决策输出的文档补丁（路径相对当前 workspace 根）。

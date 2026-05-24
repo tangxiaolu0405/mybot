@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"mybot/internal/brain"
-	"mybot/internal/config"
-	"mybot/internal/llm"
+	"cata/internal/brain"
+	"cata/internal/config"
+	"cata/internal/llm"
 )
 
 // Engine 后台自主演进。

@@ -1,7 +1,7 @@
 package server
 
 import (
-	"mybot/internal/llm"
+	"cata/internal/llm"
 )
 
 // trimHistoryToTokenBudget 从最早的用户/助手/tool 消息裁掉，使估算 token ≤ budget（保留前置 system 若有）。

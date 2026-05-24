@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"mybot/internal/brain"
-	"mybot/internal/config"
+	"cata/internal/brain"
+	"cata/internal/config"
 )
 
 // RunCrystallize 高 token / 重复任务后尝试将探索固化为脑子内 skill（不修改 mcp）。

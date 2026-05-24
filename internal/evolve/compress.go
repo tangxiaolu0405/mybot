@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"mybot/internal/brain"
-	"mybot/internal/config"
+	"cata/internal/brain"
+	"cata/internal/config"
 )
 
 // sessionCompressMinShortBytes 会话触发压缩时 short-term 至少字节数。

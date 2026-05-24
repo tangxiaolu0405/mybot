@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"mybot/internal/clock"
-	"mybot/internal/config"
+	"cata/internal/clock"
+	"cata/internal/config"
 )
 
 func handleConfigCommand(args []string) {

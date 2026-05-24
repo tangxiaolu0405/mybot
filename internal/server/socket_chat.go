@@ -19,12 +19,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"mybot/internal/brain"
-	"mybot/internal/config"
-	"mybot/internal/evolve"
-	"mybot/internal/execcmd"
-	"mybot/internal/llm"
-	"mybot/internal/mcp"
+	"cata/internal/brain"
+	"cata/internal/config"
+	"cata/internal/evolve"
+	"cata/internal/execcmd"
+	"cata/internal/llm"
+	"cata/internal/mcp"
 )
 
 var activeChatStreams int32

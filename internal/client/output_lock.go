@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mybot/internal/brain"
-	"mybot/internal/clock"
+	"cata/internal/brain"
+	"cata/internal/clock"
 )
 
 type lockMeta struct {

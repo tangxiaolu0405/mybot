@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"mybot/internal/config"
+	"cata/internal/config"
 )
 
 // SkillManifest 可执行 skill（manifest.yaml）。

@@ -3,7 +3,7 @@ package evolve
 import (
 	"strings"
 
-	"mybot/internal/brain"
+	"cata/internal/brain"
 )
 
 // shouldFinalizeShortTerm 演进已成功提炼后，归档并缩短 short-term，避免下轮重复喂 LLM。

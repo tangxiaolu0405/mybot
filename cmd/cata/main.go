@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 
-	"mybot/internal/brain"
-	"mybot/internal/client"
-	"mybot/internal/config"
-	"mybot/internal/server"
+	"cata/internal/brain"
+	"cata/internal/client"
+	"cata/internal/config"
+	"cata/internal/server"
 )
 
 func main() {

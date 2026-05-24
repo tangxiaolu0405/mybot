@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode"
 
-	"mybot/internal/clock"
-	"mybot/internal/config"
+	"cata/internal/clock"
+	"cata/internal/config"
 )
 
 // ResolveWorkspace 用产出区 cwd 解析脑子分区（focus_path），并设置 exec 产出目录。

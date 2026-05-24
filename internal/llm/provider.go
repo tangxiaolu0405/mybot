@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"mybot/internal/config"
+	"cata/internal/config"
 )
 
 // Tool 定义给 LLM 暴露的「工具」（兼容 OpenAI tools/function calling）
