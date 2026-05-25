@@ -26,3 +26,18 @@ func rawMode() (func(), error) {
 func readKey() (rune, error) {
 	return readKeyOS()
 }
+
+// utf8BytesRemaining returns the number of continuation bytes expected
+// after the given UTF-8 lead byte.
+func utf8BytesRemaining(first byte) int {
+	if first&0xE0 == 0xC0 {
+		return 1
+	}
+	if first&0xF0 == 0xE0 {
+		return 2
+	}
+	if first&0xF8 == 0xF0 {
+		return 3
+	}
+	return 0
+}

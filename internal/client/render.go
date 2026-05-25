@@ -126,6 +126,6 @@ func diffLine(content string) {
 // welcome prints the startup message.
 func welcome() {
 	meta("%s── cata ──────────────────────────────%s\n", ansiDim, ansiReset)
-	meta("  /clear  reset  ·  /exit  quit  ·  %s\"\"\"%s multiline\n", ansiDim, ansiReset)
+	meta("  /clear reset  /exit quit  /config  /help  %s\"\"\"%s multiline\n", ansiDim, ansiReset)
 	meta("%s──────────────────────────────────────%s\n", ansiDim, ansiReset)
 }

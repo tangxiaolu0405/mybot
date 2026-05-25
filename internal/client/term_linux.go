@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -33,7 +34,7 @@ func rawModeOS() (func() error, error) {
 }
 
 func readKeyOS() (rune, error) {
-	var buf [3]byte
+	var buf [4]byte
 	n, err := os.Stdin.Read(buf[:1])
 	if err != nil || n == 0 {
 		return 0, err
@@ -52,6 +53,19 @@ func readKeyOS() (rune, error) {
 			return keyQ, nil
 		case '\t':
 			return keyTab, nil
+		}
+		// Multi-byte UTF-8 sequence: read remaining bytes and decode.
+		if buf[0] >= 0x80 {
+			extra := utf8BytesRemaining(buf[0])
+			for i := 0; i < extra; i++ {
+				if _, err := os.Stdin.Read(buf[1+i : 2+i]); err != nil {
+					return rune(buf[0]), nil
+				}
+			}
+			r, _ := utf8.DecodeRune(buf[:1+extra])
+			if r != utf8.RuneError || extra == 0 {
+				return r, nil
+			}
 		}
 		return rune(buf[0]), nil
 	}

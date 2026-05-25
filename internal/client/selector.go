@@ -5,11 +5,17 @@ import (
 	"os"
 )
 
+func upN(n int) {
+	for i := 0; i < n; i++ {
+		fmt.Fprint(os.Stderr, "\033[1A")
+	}
+}
+
 // SelectOption represents a single choice in an interactive selector.
 type SelectOption struct {
 	ID    string
 	Label string
-	Desc  string // optional, shown dim below the label
+	Desc  string // optional, shown dim on the same line after the label
 }
 
 // Select presents an interactive list and returns the chosen option ID.
@@ -30,7 +36,11 @@ func Select(prompt, detail string, options []SelectOption) (string, error) {
 
 	idx := 0
 	renderSingle(prompt, detail, options, idx)
-	defer clearSelect(len(options) + optionDetailLines(options))
+	sc := 1 + len(options) // prompt + options
+	if detail != "" {
+		sc++
+	}
+	defer clearSelect(sc)
 
 	for {
 		key, err := readKey()
@@ -81,7 +91,11 @@ func SelectMulti(prompt, detail string, options []SelectOption) ([]string, error
 	idx := 0
 	selected := make(map[int]bool)
 	renderMulti(prompt, detail, options, idx, selected)
-	defer clearSelect(len(options) + optionDetailLines(options))
+	mc := 2 + len(options) // prompt + hint + options
+	if detail != "" {
+		mc++
+	}
+	defer clearSelect(mc)
 
 	for {
 		key, err := readKey()
@@ -127,11 +141,9 @@ func selectedIDs(options []SelectOption, selected map[int]bool) []string {
 // --- single-select rendering ---
 
 func renderSingle(prompt, detail string, options []SelectOption, selected int) {
-	lines := optionDetailLines(options) + 1
-	meta("\n  %s%s%s\n", ansiBold, prompt, ansiReset)
+	meta("\n  %s%s%s%s\n", ansiBold, prompt, ansiReset, clearLine())
 	if detail != "" {
-		meta("  %s%s%s\n", ansiDim, detail, ansiReset)
-		lines++
+		meta("  %s%s%s%s\n", ansiDim, detail, ansiReset, clearLine())
 	}
 	for i, opt := range options {
 		if i == selected {
@@ -144,15 +156,13 @@ func renderSingle(prompt, detail string, options []SelectOption, selected int) {
 		}
 		meta("%s\n", clearLine())
 	}
-	_ = lines
 }
 
 func rerenderSingle(prompt, detail string, options []SelectOption, selected int) {
-	lines := 1 + len(options)
+	lines := 2 + len(options) // \n (initial pos) + prompt \n + each option \n
 	if detail != "" {
 		lines++
 	}
-	lines += optionDetailLines(options)
 	upN(lines)
 	renderSingle(prompt, detail, options, selected)
 }
@@ -160,12 +170,12 @@ func rerenderSingle(prompt, detail string, options []SelectOption, selected int)
 // --- multi-select rendering ---
 
 func renderMulti(prompt, detail string, options []SelectOption, idx int, selected map[int]bool) {
-	meta("\n  %s%s%s\n", ansiBold, prompt, ansiReset)
+	meta("\n  %s%s%s%s\n", ansiBold, prompt, ansiReset, clearLine())
 	if detail != "" {
-		meta("  %s%s%s\n", ansiDim, detail, ansiReset)
+		meta("  %s%s%s%s\n", ansiDim, detail, ansiReset, clearLine())
 	}
-	keys := "  %stab%s toggle  %senter%s confirm  %sesc%s cancel\n"
-	meta(keys, ansiDim, ansiReset, ansiDim, ansiReset, ansiDim, ansiReset)
+	meta("  %stab%s toggle  %senter%s confirm  %sesc%s cancel%s\n",
+		ansiDim, ansiReset, ansiDim, ansiReset, ansiDim, ansiReset, clearLine())
 	for i, opt := range options {
 		check := " "
 		if selected[i] {
@@ -184,40 +194,24 @@ func renderMulti(prompt, detail string, options []SelectOption, idx int, selecte
 }
 
 func rerenderMulti(prompt, detail string, options []SelectOption, idx int, selected map[int]bool) {
-	lines := 2 + len(options) // prompt + hint + options
+	lines := 3 + len(options) // initial \n + prompt \n + hint \n + each option \n
 	if detail != "" {
 		lines++
 	}
-	lines += optionDetailLines(options)
 	upN(lines)
 	renderMulti(prompt, detail, options, idx, selected)
 }
 
 // --- helpers ---
 
-func optionDetailLines(options []SelectOption) int {
-	n := 0
-	for _, opt := range options {
-		if opt.Desc != "" {
-			n++
-		}
-	}
-	return n
-}
-
 func clearSelect(count int) {
 	upN(count)
 	for i := 0; i < count; i++ {
-		meta("%s\n", clearLine())
+		meta("\r%s\n", clearLine())
 	}
 	upN(count)
 }
 
-func hideCursor()                  { meta("\033[?25l") }
-func showCursor()                  { meta("\033[?25h") }
-func clearLine() string            { return "\033[0K" }
-func upN(n int) {
-	for i := 0; i < n; i++ {
-		fmt.Fprint(os.Stderr, "\033[1A")
-	}
-}
+func hideCursor()        { meta("\033[?25l") }
+func showCursor()        { meta("\033[?25h") }
+func clearLine() string { return "\033[0K" }

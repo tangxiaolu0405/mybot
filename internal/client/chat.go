@@ -113,7 +113,6 @@ func RunChat() {
 
 	welcome()
 
-	sc := bufio.NewScanner(os.Stdin)
 	for {
 		select {
 		case <-sigCh:
@@ -121,11 +120,10 @@ func RunChat() {
 			return
 		default:
 		}
-		fmt.Print(ansiBold + "› " + ansiReset)
-		if !sc.Scan() {
-			break
+		line, err := readLine()
+		if err != nil {
+			return
 		}
-		line := readInput(sc, sc.Text())
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -147,8 +145,17 @@ func RunChat() {
 					continue
 				}
 				progressMsg(r.Message)
+			case "config":
+				meta("  config: %s%s%s\n", ansiYellow, config.GetConfigPath(), ansiReset)
+			case "cls":
+				meta("\033[H\033[2J")
+			case "help":
+				meta("  %scommands:%s\n", ansiBold, ansiReset)
+				for _, c := range commands {
+					meta("  %s/%s%s  %s%s%s\n", ansiBold, c.Name, ansiReset, ansiDim, c.Desc, ansiReset)
+				}
 			default:
-				meta("  %sunknown:%s /%s (try /clear, /exit)\n", ansiDim, ansiReset, cmd)
+				meta("  %sunknown:%s /%s (try /help)\n", ansiDim, ansiReset, cmd)
 			}
 			continue
 		}
@@ -172,24 +179,6 @@ func RunChat() {
 			}
 		}
 	}
-}
-
-func readInput(sc *bufio.Scanner, first string) string {
-	if strings.TrimSpace(first) != `"""` {
-		return first
-	}
-	var b strings.Builder
-	for sc.Scan() {
-		line := sc.Text()
-		if strings.TrimSpace(line) == `"""` {
-			break
-		}
-		if b.Len() > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(line)
-	}
-	return b.String()
 }
 
 func (s *session) drainStream() error {
